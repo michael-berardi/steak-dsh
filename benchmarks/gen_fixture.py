@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixture setup: copy bench/fixture to <dest> and write the generated large files.
+"""Fixture setup: copy benchmarks/fixture to <dest> and write the generated large files.
 
 usage: python3 gen_fixture.py <dest>
 The runner imports this module and calls prepare(dest).

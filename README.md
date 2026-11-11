@@ -144,15 +144,15 @@ were planned; a first look gave 0.89 (0.78 to 1.02) on DeepSeek V4.1 Flash, so t
 five repeats, recorded in GATE.md before the extra runs. On a declared gateway route DSH cannot send the session
 headers Steak Pi sends, which may affect cache hits for either side.
 
-Raw rows are in [bench/results](bench/results). Reproduce:
+Raw rows are in [benchmarks/results](benchmarks/results). Reproduce:
 
 ```sh
-python3 bench/selftest.py
-python3 bench/run.py --model deepseek --arms dsh,sdsh,sp --reps 5 --par 3 --out results.jsonl
-python3 bench/summarize.py results.jsonl --md
+python3 benchmarks/selftest.py
+python3 benchmarks/run.py --model deepseek --arms dsh,sdsh,sp --reps 5 --par 3 --out results.jsonl
+python3 benchmarks/summarize.py results.jsonl --md
 ```
 
-`bench/models.json` holds the routes and prices. The maintained version of this benchmark is
+`benchmarks/models.json` holds the routes and prices. The maintained version of this benchmark is
 [ParetoBench](https://github.com/michael-berardi/paretobench).
 
 ## Security
@@ -164,5 +164,5 @@ Plugins run inside the `dsh` process. Owned paths gate the file-editing tools, n
 
 ```sh
 npm test                    # 35 tests, Node built-ins only
-python3 bench/selftest.py   # 20 tasks: check fails untouched, passes on the reference solution
+python3 benchmarks/selftest.py   # 20 tasks: check fails untouched, passes on the reference solution
 ```

@@ -71,16 +71,16 @@ injected (`PI_BIN`). The dsh arms need `dsh` on PATH or `DSH_BIN`. Keys are read
 ```sh
 cd <this repo>
 # smoke (2 arms, 3 tasks, 1 rep, 2 lanes per arm)
-python3 bench/run.py --model qwen --arms dsh,sp --reps 1 --par 2 --tasks t2,t3,t1 \
+python3 benchmarks/run.py --model qwen --arms dsh,sp --reps 1 --par 2 --tasks t2,t3,t1 \
     --out smoke.jsonl
-python3 bench/summarize.py smoke.jsonl --md
+python3 benchmarks/summarize.py smoke.jsonl --md
 
 # full comparison on a paid model (needs the openrouter key in ~/.pi/agent/auth.json)
-python3 bench/run.py --model deepseek --arms dsh,sdsh,sp --reps 5 --par 4 --out results.jsonl
-python3 bench/summarize.py results.jsonl --baseline dsh --md
+python3 benchmarks/run.py --model deepseek --arms dsh,sdsh,sp --reps 5 --par 4 --out results.jsonl
+python3 benchmarks/summarize.py results.jsonl --baseline dsh --md
 
 # ablation: dsh plus one feature patch
-python3 bench/run.py --model qwen --arms dsh,nofoo --variant nofoo=patches/nofoo.yml \
+python3 benchmarks/run.py --model qwen --arms dsh,nofoo --variant nofoo=patches/nofoo.yml \
     --reps 3 --par 2 --out ablation.jsonl
 ```
 
@@ -92,7 +92,7 @@ appended and flushed one at a time. A run that hits a rate limit (429 in stderr 
 Requirements on this machine: the dsh install at the `DSH_BIN` path, the raw Pi binary at `PI_BIN`,
 `claude` on PATH for the cc arm, the Steak Pi release package, and `~/.pi/agent/auth.json` with the
 key entries named in `models.json`. Until `tasks.json` / `checks/check.py` / `gen_fixture.py` exist in
-`bench/`, the runner falls back to a copy of the `benchmarks/ab` benchmark shipped with Steak Pi.
+`benchmarks/`, the runner falls back to a copy of the `benchmarks/ab` benchmark shipped with Steak Pi.
 
 ## Limits
 

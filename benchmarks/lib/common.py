@@ -2,7 +2,7 @@
 import json
 import os
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # bench/
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # benchmarks/
 REPO = os.path.dirname(HERE)
 
 def _which(name):

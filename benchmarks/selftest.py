@@ -3,9 +3,9 @@
 
 For every task t1..t8 and h1..h12:
   * the hidden check must FAIL on an untouched fixture,
-  * the check must PASS after running bench/reference/<task>.py on a fresh fixture.
+  * the check must PASS after running benchmarks/reference/<task>.py on a fresh fixture.
 For the category-(b) tasks h3 and h4 the check must also FAIL after the obvious
-wrong fix (bench/reference/<task>_wrong.py).
+wrong fix (benchmarks/reference/<task>_wrong.py).
 Prints one PASS line per task (20) and exits non-zero on any failure.
 """
 import json
