@@ -2,7 +2,7 @@
 # Tests for the one-step installers, against a local release folder served over HTTP.
 # Covers: macOS (this machine), Linux (ubuntu:24.04 container, both dsh branches), and install.ps1
 # under PowerShell 7 in the mcr.microsoft.com/powershell container (no Node in that image: the
-# script fetching Node itself is part of what is tested). Needs: docker, python3, shellcheck, network.
+# script fetching Node itself is part of what is tested). Needs: docker, python3, node, shellcheck, network.
 # Usage: scripts/test-install.sh          (commit first: build-release.sh builds from a clean tree)
 # STEAK_DSH_TEST_SKIP=mac,linux,pwsh skips sections; STEAK_DSH_TEST_PORT sets the server port.
 set -euo pipefail
@@ -49,9 +49,10 @@ export npm_config_cache="$ROOT/.scratch/npm-cache"
 say "shellcheck"
 shellcheck scripts/install.sh scripts/build-release.sh
 
-say "repo tests (npm test)"
-npm test >"$WORK/logs/repo-tests.log" 2>&1 || { tail -20 "$WORK/logs/repo-tests.log"; fail "repo tests"; }
-tail -3 "$WORK/logs/repo-tests.log"
+say "repo tests (node --test, the npm test command)"
+node -p 'process.versions.node' >/dev/null 2>&1 || fail "no working node on PATH to run the repo tests; install Node 22+"
+node --test test/*.test.js >"$WORK/logs/repo-tests.log" 2>&1 || { tail -20 "$WORK/logs/repo-tests.log"; fail "repo tests"; }
+grep -E '^# (tests|pass|fail)' "$WORK/logs/repo-tests.log"
 
 say "build release assets"
 scripts/build-release.sh dist/release
