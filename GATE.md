@@ -26,3 +26,15 @@ Each Steak DSH feature is kept only if removing it makes condition 1 or 2 worse 
 shows no effect is removed or shipped off by default.
 
 Failures, timeouts and harness errors stay in the sample as incorrect runs. Raw per-run rows are published.
+
+## Amendment, 2026-11-11, written after the first look and before any further run
+
+First look at the release configuration, 2 repeats (40 pairs) on the `deepseek` key: correct 40/40 for both arms,
+cost ratio `sdsh / dsh` 0.89, 95% interval 0.78 to 1.02. Condition 2 fails on that sample because the interval
+reaches 1.00. An earlier 2-repeat sample of the same behaviour gave 0.82 (0.72 to 0.93); it was run with a since
+changed default (finish guard on, though it never acted) and at the same time as another runner, so it is not counted.
+
+Two repeats are too few to settle an effect of this size. The sample is extended once, to a fixed 5 repeats per model
+(100 pairs) for both the `deepseek` and `qwen` keys, with the bundle unchanged. The verdict uses all 5 repeats,
+including the 2 already run. No further extension, and no change to the bundle between repeats. The README reports
+the 5-repeat numbers whatever they are, and says the sample was extended after a first look.
