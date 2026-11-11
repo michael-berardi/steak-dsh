@@ -29,24 +29,24 @@ test("render(): plain text, dim tool lines, red errors, closing turn/token line"
     "> bash: npm test",
     "> write: /repo/b.txt",
     "! Error: steak-dsh: /repo/b.txt is outside this task's owned paths (/repo/allowed)",
-    "— 1 turn, 1500 tokens",
+    "1 turn, 1500 tokens",
   ]);
   const colored = render(EVENTS, { color: true });
   assert.equal(colored[0], "I will run the tests.", "assistant text stays plain");
   assert.equal(colored[1], "\x1b[2m> bash: npm test\x1b[0m");
   assert.match(colored[3], /^\x1b\[31m! Error: /);
-  assert.equal(colored[4], "\x1b[2m— 1 turn, 1500 tokens\x1b[0m");
+  assert.equal(colored[4], "\x1b[2m1 turn, 1500 tokens\x1b[0m");
 });
 
 test("render(): error events, multiple turns, missing usage, empty streams", () => {
   assert.deepEqual(renderEvent({ type: "error", message: "boom" }), ["error: boom"]);
-  assert.deepEqual(render([]), ["— 0 turns, 0 tokens"]);
+  assert.deepEqual(render([]), ["0 turns, 0 tokens"]);
   const two = render([
     { type: "status", phase: "turn_end", turn: 1 },
     { type: "status", phase: "step_end", usage: { inputTokens: 10, outputTokens: 5 } },
     { type: "status", phase: "turn_end", turn: 2 },
   ]);
-  assert.equal(two.at(-1), "— 2 turns, 15 tokens", "usage falls back to input+output");
+  assert.equal(two.at(-1), "2 turns, 15 tokens", "usage falls back to input+output");
   assert.deepEqual(renderEvent({ type: "thinking", text: "hmm" }), [], "thinking is not rendered");
   assert.deepEqual(renderEvent({ type: "tool_result", status: "completed", result: "ok" }), []);
 });
@@ -107,7 +107,7 @@ test("chat: two scripted turns; the second turn continues the first turn's sessi
     assert.ok(at >= 0, "second turn passes --session-id");
     assert.equal(turns[1].argv[at + 1], "sess-1", "the id from the first session event");
     assert.equal(stdout.includes("canned reply"), true);
-    assert.equal(stdout.includes("— 1 turn, 1500 tokens"), true);
+    assert.equal(stdout.includes("1 turn, 1500 tokens"), true);
     assert.equal(stdout.includes("\x1b["), false, "no colour when stdout is not a TTY");
     const overlay = turns[0].patches.find((p) => p.path.endsWith("overlay.yml"));
     assert.ok(overlay, "chat applies the generated overlay");
