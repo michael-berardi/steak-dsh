@@ -1,0 +1,40 @@
+# Steak DSH bundle layer. Applied after the bundles listed before it in the profile.
+# Every row can be switched off from your own profile patch:  - id: <row id>\n    disabled: true
+
+# A one-shot run needs no model-written session title; the word-based fallback title stays.
+- id: session-title-llm
+  disabled: true
+
+# Tools a one-shot coding task does not use. Each one is schema text sent with every request.
+- id: tool-goal
+  disabled: true
+- id: goal-round-driver
+  disabled: true
+- id: command-goal
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-working-directory
+  disabled: true
+
+- insert:
+    - id: steak-rules
+      name: ./plugins/rules.js
+      config: {}
+    # Off by default: in the benchmark it never had to act. Turn it on from your profile patch with
+    #   - id: steak-finish-guard
+    #     disabled: false
+    - id: steak-finish-guard
+      name: ./plugins/finish-guard.js
+      disabled: true
+      config:
+        maxPushes: 3
+    - id: steak-verify-after-edit
+      name: ./plugins/verify-after-edit.js
+      config: {}

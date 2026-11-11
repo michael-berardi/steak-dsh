@@ -1,0 +1,123 @@
+{
+  "qwen": {
+    "note": "flat plan; both harnesses send reasoning effort medium through the same pi-ai adapter",
+    "key": {
+      "auth": "qwencloud",
+      "env": "QWENCLOUD_API_KEY"
+    },
+    "dsh": {
+      "provider": "qwencloud",
+      "model": "qwen4-max-preview",
+      "route": {
+        "displayName": "QwenCloud",
+        "apiKeyEnv": "QWENCLOUD_API_KEY",
+        "api": "openai-completions",
+        "baseURL": "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1",
+        "compat": {
+          "supportsDeveloperRole": false,
+          "supportsStore": false,
+          "maxTokensField": "max_tokens"
+        },
+        "models": [
+          {
+            "id": "qwen4-max-preview",
+            "name": "Qwen 4 Max (preview)",
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "reasoningEfforts": {
+              "off": null,
+              "low": "low",
+              "medium": "medium",
+              "high": "high"
+            }
+          }
+        ]
+      },
+      "reasoningEffort": "medium"
+    },
+    "sp": [
+      "--model",
+      "qwencloud/qwen4-max-preview",
+      "--thinking",
+      "medium"
+    ],
+    "rates": {
+      "i": 0,
+      "cr": 0,
+      "cw": 0,
+      "o": 0
+    }
+  },
+  "deepseek": {
+    "key": {
+      "auth": "openrouter",
+      "env": "OPENROUTER_API_KEY"
+    },
+    "dsh": {
+      "provider": "openrouter",
+      "model": "deepseek/deepseek-v4.1-flash-1017:exacto",
+      "reasoningEffort": "high",
+      "route": {
+        "displayName": "OpenRouter",
+        "apiKeyEnv": "OPENROUTER_API_KEY",
+        "api": "openai-completions",
+        "baseURL": "https://openrouter.ai/api/v1",
+        "compat": {
+          "supportsDeveloperRole": false,
+          "thinkingFormat": "openrouter",
+          "requiresReasoningContentOnAssistantMessages": true,
+          "supportsStrictMode": true
+        },
+        "models": [
+          {
+            "id": "deepseek/deepseek-v4.1-flash-1017:exacto",
+            "name": "DeepSeek V4.1 Flash (exacto)",
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "reasoningEfforts": {
+              "off": "none",
+              "low": "low",
+              "high": "high",
+              "max": "max"
+            }
+          }
+        ]
+      }
+    },
+    "sp": [
+      "--model",
+      "openrouter/deepseek/deepseek-v4.1-flash-1017:exacto",
+      "--thinking",
+      "high",
+      "--steak-pi-paid-route=openrouter/deepseek/deepseek-v4.1-flash-1017:exacto"
+    ],
+    "rates": {
+      "i": 3.5e-08,
+      "cr": 5e-09,
+      "cw": 0,
+      "o": 5e-07
+    },
+    "note": "per-token prices of the route; DSH cannot send the gateway's session-affinity headers on a declared route, Steak Pi does"
+  },
+  "haiku": {
+    "dsh": null,
+    "cc": [
+      "--model",
+      "claude-haiku-5-5",
+      "--effort",
+      "medium"
+    ],
+    "sp": [
+      "--model",
+      "claude-code/claude-haiku-5-5",
+      "--thinking",
+      "medium"
+    ],
+    "rates": {
+      "i": 1e-07,
+      "cr": 1e-08,
+      "cw": 2e-07,
+      "o": 5e-07
+    }
+  }
+}

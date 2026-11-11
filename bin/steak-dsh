@@ -1,0 +1,10 @@
+#!/usr/bin/env node
+import { main } from "../lib/main.js";
+
+main(process.argv.slice(2)).then(
+  (code) => process.exit(code ?? 0),
+  (error) => {
+    process.stderr.write(`steak-dsh: ${error?.message ?? error}\n`);
+    process.exit(error?.exitCode ?? 1);
+  },
+);
