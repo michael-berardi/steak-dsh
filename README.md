@@ -4,11 +4,11 @@ Steak DSH is a plugin bundle for [DeepSeek Harness](https://github.com/deepseek-
 one-shot coding tasks cost less on the same model, and adds a check after every edit, owned paths for file edits, and
 a launcher that picks the model with flags.
 
-On 100 paired runs per model against stock DSH 0.2.2-rc.1, every run correct in both:
+Measured against stock DSH 0.2.2-rc.1 on the same model, every run correct in both:
 
 | Model | Steak DSH / stock DSH | 95% interval | Steak DSH cheaper in |
 |---|---|---|---|
-| DeepSeek V4.1 Flash (dollars) | 0.84 | 0.76 to 0.93 | 73 of 100 pairs |
+| DeepSeek V4.1 Flash (dollars) | 0.87 | 0.80 to 0.94 | 108 of 160 pairs, two runs |
 | Qwen 4 Max (weighted tokens) | 0.70 | 0.62 to 0.78 | 78 of 100 pairs |
 
 MIT. No dependencies. By [Pareto Cybernetics](https://paretocybernetics.com).
@@ -20,7 +20,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.1.1
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -29,7 +29,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh
+npm i -g github:michael-berardi/steak-dsh#v0.1.1
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -128,9 +128,27 @@ faster here.
 | Claude Code | 40/40 | $0.00276 | 10.4 s | 1.00 |
 | Steak Pi 0.25.7 | 39/40 | $0.00216 | 15.3 s | 0.78 (0.60 to 1.04) |
 
+**Second run, with stock Pi added** ([ParetoBench](https://github.com/michael-berardi/paretobench), DeepSeek V4.1
+Flash, 240 runs, three repeats)
+
+| Harness | Correct | Cost per run | Median time | vs stock Pi (95% interval) |
+|---|---|---|---|---|
+| **Pi 1.0.4 (stock)** | 60/60 | **$0.00060** | **14.8 s** | 1.00 |
+| Steak DSH 0.1.0 | 60/60 | $0.00088 | 21.3 s | 1.47 (1.26 to 1.70) |
+| Stock DSH 0.2.2-rc.1 | 60/60 | $0.00095 | 20.4 s | 1.59 (1.44 to 1.74) |
+| Steak Pi 0.25.7 | 60/60 | $0.00122 | 22.5 s | 2.04 (1.71 to 2.37) |
+
+In this run Steak DSH against stock DSH was 0.92 (0.81 to 1.06). Over both runs together, 160 pairs: 0.87 (0.80 to
+0.94).
+
 What the data says:
 
-- Steak DSH costs less than stock DSH on both models, with the whole interval below 1.00.
+- Steak DSH costs less than stock DSH. On Qwen 4 Max the whole interval is below 1.00. On DeepSeek V4.1 Flash the
+  first run (100 pairs) gave 0.84 and the second (60 pairs) gave 0.92 with an interval that reaches 1.00; pooled it is
+  0.87 with the interval below 1.00. Expect a saving of about a tenth on that model, not a sixth.
+- Stock Pi is the cheapest and fastest harness on these short tasks, ahead of every DSH variant and of Steak Pi. The
+  tools Steak Pi adds are overhead on a 20-second task; they are built for long sessions, which this task set does not
+  measure.
 - Which of Steak DSH and Steak Pi is better depends on the model. On DeepSeek V4.1 Flash, Steak DSH is cheaper and
   faster. On Qwen 4 Max they cost the same and Steak Pi is faster.
 - Every harness solved every task on the two open models, so these tasks measure cost and time. They do not show a
@@ -144,7 +162,8 @@ were planned; a first look gave 0.89 (0.78 to 1.02) on DeepSeek V4.1 Flash, so t
 five repeats, recorded in GATE.md before the extra runs. On a declared gateway route DSH cannot send the session
 headers Steak Pi sends, which may affect cache hits for either side.
 
-Raw rows are in [benchmarks/results](benchmarks/results). Reproduce:
+Raw rows are in [benchmarks/results](benchmarks/results); the second run's rows are in the ParetoBench repository
+under `results/2026-11-11-harness-deepseek`. Reproduce:
 
 ```sh
 python3 benchmarks/selftest.py

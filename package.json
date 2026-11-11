@@ -1,24 +1,53 @@
 {
   "name": "steak-dsh",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Steak DSH: a plugin bundle for DeepSeek Harness (dsh) with a finish guard, verify-after-edit, working rules and a leaner one-shot profile.",
   "license": "MIT",
   "author": "Pareto Cybernetics",
   "type": "module",
-  "repository": { "type": "git", "url": "git+https://github.com/michael-berardi/steak-dsh.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/michael-berardi/steak-dsh.git"
+  },
   "homepage": "https://github.com/michael-berardi/steak-dsh#readme",
-  "bugs": { "url": "https://github.com/michael-berardi/steak-dsh/issues" },
-  "keywords": ["dsh", "deepseek-harness", "dsh-plugin", "dsh-bundle", "coding-agent", "steak-dsh"],
-  "engines": { "node": ">=22", "dsh": ">=0.2.2-rc.1 <0.3.0" },
-  "files": ["plugins", "bin", "lib", "cordis.patch.yml", "README.md", "CHANGELOG.md", "LICENSE"],
-  "bin": { "steak-dsh": "bin/steak-dsh" },
+  "bugs": {
+    "url": "https://github.com/michael-berardi/steak-dsh/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh-bundle",
+    "coding-agent",
+    "steak-dsh"
+  ],
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "files": [
+    "plugins",
+    "bin",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "steak-dsh": "bin/steak-dsh"
+  },
   "exports": {
     "./package.json": "./package.json",
     "./plugins/*": "./plugins/*"
   },
   "dsh": {
     "manifestVersion": 1,
-    "bundle": { "patch": "./cordis.patch.yml" }
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   },
-  "scripts": { "test": "node --test test/*.test.js" }
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
 }
