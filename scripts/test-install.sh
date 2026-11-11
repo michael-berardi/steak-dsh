@@ -124,7 +124,7 @@ fi
 # ---------------------------------------------------------------- Linux containers
 if [[ "$SKIP" != *,linux,* ]]; then
   say "Linux branch A: ubuntu:24.04, no Node, no dsh (installer fetches both)"
-  docker run --rm -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
+  docker run --rm --name steak-dsh-test-linux-a -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
     -e STEAK_DSH_RELEASE_BASE="$DOCKER_BASE/good" -e npm_config_cache=/npmcache \
     ubuntu:24.04 bash -c '
       set -e
@@ -151,7 +151,7 @@ if [[ "$SKIP" != *,linux,* ]]; then
   tail -6 "$WORK/logs/linux-a.log"
 
   say "Linux branch B: ubuntu:24.04 with Node 22 and dsh preinstalled"
-  docker run --rm -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
+  docker run --rm --name steak-dsh-test-linux-b -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
     -e STEAK_DSH_RELEASE_BASE="$DOCKER_BASE/good" -e npm_config_cache=/npmcache \
     ubuntu:24.04 bash -c '
       set -e
@@ -180,10 +180,20 @@ fi
 # ---------------------------------------------------------------- PowerShell 7 (Linux container)
 if [[ "$SKIP" != *,pwsh,* ]]; then
   say "pwsh: install.ps1 in mcr.microsoft.com/powershell (no Node in the image)"
+  # The powershell image ships only amd64 and armv7 (no arm64), so pin the amd64 variant by digest:
+  # native on x64 hosts, emulated on arm64 hosts (slower; the dsh npm install can take several minutes).
+  PWSH_IMAGE="steak-dsh-pwsh-test:amd64"
+  if [ "$(docker image inspect "$PWSH_IMAGE" --format '{{.Architecture}}' 2>/dev/null || true)" != amd64 ]; then
+    pwsh_digest=$(docker manifest inspect mcr.microsoft.com/powershell:latest \
+      | python3 -c 'import json,sys; m=json.load(sys.stdin); print(next(x["digest"] for x in m["manifests"] if x["platform"]["architecture"]=="amd64" and x["platform"]["os"]=="linux"))') \
+      || fail "cannot resolve the amd64 powershell image digest"
+    docker pull "mcr.microsoft.com/powershell@$pwsh_digest" || fail "cannot pull the amd64 powershell image"
+    docker tag "mcr.microsoft.com/powershell@$pwsh_digest" "$PWSH_IMAGE"
+  fi
   # shellcheck disable=SC2016  # single quotes are deliberate: this is PowerShell, not shell
-  docker run --rm -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
+  docker run --rm --name steak-dsh-test-pwsh --platform linux/amd64 -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
     -e STEAK_DSH_RELEASE_BASE="$DOCKER_BASE/good" -e npm_config_cache=/npmcache \
-    mcr.microsoft.com/powershell pwsh -NoProfile -Command '
+    "$PWSH_IMAGE" pwsh -NoProfile -Command '
       $ErrorActionPreference = "Stop"
       & /scripts/install.ps1
       $v = & "$HOME/.local/bin/steak-dsh" --version
@@ -213,7 +223,7 @@ if [[ "$SKIP" != *,pwsh,* ]]; then
   say "pwsh: PSScriptAnalyzer (skipped when it does not install quickly)"
   TIMEOUT_CMD=$(command -v timeout || command -v gtimeout || true)
   # shellcheck disable=SC2016  # single quotes are deliberate: this is PowerShell, not shell
-  if ${TIMEOUT_CMD:+$TIMEOUT_CMD 180} docker run --rm -v "$ROOT/scripts:/scripts:ro" mcr.microsoft.com/powershell \
+  if ${TIMEOUT_CMD:+$TIMEOUT_CMD 300} docker run --rm --name steak-dsh-test-psanalyzer --platform linux/amd64 -v "$ROOT/scripts:/scripts:ro" "$PWSH_IMAGE" \
     pwsh -NoProfile -Command '
       Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
       $r = Invoke-ScriptAnalyzer -Path /scripts/install.ps1
