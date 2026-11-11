@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- One-step installers: `install.sh` (macOS and Linux) and `install.ps1` (Windows, also runs under PowerShell 7 on
+  Linux) download the release, check its SHA-256, bring Node 22 and DeepSeek Harness when missing, add the bundle
+  to the dsh headless profile, and finish with `steak-dsh doctor`. `scripts/build-release.sh` builds the release
+  assets; `scripts/test-install.sh` tests both dsh branches on macOS, in an Ubuntu container, and under pwsh.
+
 ## 0.1.2 - 2026-11-11
 
 Fixes from an independent review of 0.1.1.

@@ -19,6 +19,43 @@ MIT. No dependencies. By [Pareto Cybernetics](https://paretocybernetics.com).
 
 ## Install
 
+One step, the whole bundle. macOS and Linux:
+
+```sh
+curl -fsSL https://github.com/michael-berardi/steak-dsh/releases/latest/download/install.sh | sh
+```
+
+Windows (PowerShell 5.1 or 7):
+
+```powershell
+irm https://github.com/michael-berardi/steak-dsh/releases/latest/download/install.ps1 | iex
+```
+
+The installer checks the release SHA-256, then does everything needed to leave `steak-dsh` working:
+
+- **dsh already installed** (a working `dsh` 0.2.2-rc.1 or newer on PATH): it uses yours, adds Steak DSH to it, and
+  prints `dsh was already installed: added Steak DSH to it`. Your dsh is never modified or shadowed.
+- **No dsh**: it installs DeepSeek Harness (`@deepseek-ai/dsh` 0.2.2-rc.1, about 650 npm packages, a few minutes)
+  into `~/.steak-dsh/dsh`, puts a `dsh` command next to `steak-dsh`, and prints
+  `installed DeepSeek Harness and Steak DSH`. Pin another dsh version with `STEAK_DSH_DSH_VERSION`.
+- **Node**: uses a system Node 22 or newer; when missing, fetches the official Node 22 build (checksum verified)
+  into `~/.steak-dsh/node`. Nothing is installed globally.
+- Adds the bundle to your dsh `headless` profile with `dsh plugin --profile headless add`. That step needs pnpm;
+  the installer brings it privately when missing. If the profile step fails it says so and continues: the
+  `steak-dsh` launcher works without it.
+- Finishes by running `steak-dsh doctor` and showing the result.
+
+Everything lives under `~/.steak-dsh` (Windows: `%LOCALAPPDATA%\steak-dsh`). The commands go to `~/.local/bin`
+(Windows: `%LOCALAPPDATA%\steak-dsh\bin`, added to your user PATH). No sudo, no shell profile edits; when
+`~/.local/bin` is not on your PATH the installer prints the one line to add. Overrides: `STEAK_DSH_HOME`,
+`STEAK_DSH_BIN_DIR`, `STEAK_DSH_VERSION` (pin a release), `STEAK_DSH_DSH_VERSION`, `STEAK_DSH_RELEASE_BASE`.
+
+**Update**: run the same one-liner again; it upgrades in place. **Remove**: delete `~/.steak-dsh` and the
+`steak-dsh` shim in `~/.local/bin` (plus the `dsh` shim there, if the installer created it), and
+`dsh plugin --profile headless remove steak-dsh` if you want it out of the profile.
+
+### Manual route
+
 You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or newer.
 
 **As a plugin**, in the profile you already use:

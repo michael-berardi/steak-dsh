@@ -6,3 +6,5 @@ __pycache__/
 .steak-pi/
 work/
 *.log
+dist/
+.scratch/
