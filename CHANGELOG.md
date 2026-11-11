@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.2 - 2026-11-11
+
+Fixes from an independent review of 0.1.1.
+
+- Task text can no longer be read as `dsh` flags: the launcher passes it after `--`.
+- `run` forwards hangup and quit signals, and `chat` handles termination signals: the child is stopped and the
+  temporary overlay removed.
+- Verify after edit: a cancelled check is not counted as a failure. After two failures in a row it pauses for the
+  rest of that request and says so, then starts again on your next request. A check command that leaves a background
+  process no longer waits for the timeout.
+- `--stock` with `--verify`, and `--effort level=wire` without `--base-url`, are refused by name.
+- Finish guard: reads only the current request, and recognises more ways of saying stop.
+- Owned paths: an owned filesystem root now contains everything.
+- README: the first DeepSeek V4.1 Flash run (0.84) is the headline, the second run (0.92) is stated as not clear on
+  its own, and the pooled figure is labelled as chosen afterwards. Ablation results for both models are listed.
+
 ## 0.1.1 - 2026-11-11
 
 - README: results of a second, independent run with stock Pi added (ParetoBench). Steak DSH against stock DSH on

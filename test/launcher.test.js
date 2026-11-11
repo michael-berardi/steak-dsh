@@ -17,11 +17,14 @@ if (argv[0] === "--version") {
   process.stdout.write((process.env.FAKE_DSH_VERSION ?? "0.2.2-rc.1") + "\\n");
   process.exit(0);
 }
+if (process.env.FAKE_DSH_SELF_SIGNAL) {
+  process.kill(process.pid, process.env.FAKE_DSH_SELF_SIGNAL);
+}
 const patches = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--patch") patches.push({ path: argv[i + 1], content: readFileSync(argv[i + 1], "utf8") });
 }
-appendFileSync(process.env.FAKE_DSH_RECORD, JSON.stringify({ argv, patches, telemetry: process.env.DSH_TELEMETRY_MODE }) + "\\n");
+appendFileSync(process.env.FAKE_DSH_RECORD, JSON.stringify({ argv, patches, pid: process.pid, telemetry: process.env.DSH_TELEMETRY_MODE }) + "\\n");
 if (process.env.FAKE_DSH_SLEEP) {
   process.on("SIGINT", () => {
     appendFileSync(process.env.FAKE_DSH_RECORD, JSON.stringify({ signal: "SIGINT" }) + "\\n");
@@ -77,7 +80,7 @@ test("overlay order and generated rows for every flag; secrets never leak; temp 
     assert.deepEqual(rec.argv, [
       "headless", "--patch", bundlePatch, "--patch", rec.patches[1].path, "--patch", userPatch,
       "--json", "--permission-mode", "read-only", "--approval-policy", "never",
-      "--add-dir", "/abs/extra", "--session-id", "s1", "do", "the task",
+      "--add-dir", "/abs/extra", "--session-id", "s1", "--", "do", "the task",
     ]);
     assert.equal(rec.patches[0].path, bundlePatch, "bundle patch first");
     assert.equal(rec.patches[2].path, userPatch, "user patch last");
@@ -111,7 +114,7 @@ test("default run: bundle only, workspace-write, telemetry preserved when set", 
     const result = run(["run", "hello"], s, { DSH_TELEMETRY_MODE: "FEEDBACK_ONLY" });
     assert.equal(result.status, 0, result.stderr);
     const [rec] = records(s);
-    assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "workspace-write", "--approval-policy", "never", "hello"]);
+    assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "workspace-write", "--approval-policy", "never", "--", "hello"]);
     assert.equal(rec.telemetry, "FEEDBACK_ONLY");
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
@@ -193,6 +196,9 @@ test("bad flags exit 2 with a named error", () => {
       [["run", "--owned-path", "relative/dir", "x"], /--owned-path must be an absolute path/],
       [["run", "--api", "grpc", "x"], /--api must be one of/],
       [["run", "--patch", "/no/such/file.yml", "x"], /--patch file not found/],
+      [["run", "--stock", "--verify", "npm test", "x"], /--verify cannot be combined with --stock: verify-after-edit is part of the bundle/],
+      [["run", "--verify", "npm test", "--stock", "x"], /--verify cannot be combined with --stock/],
+      [["run", "--effort", "high=max", "x"], /--effort high=max: the =<wire> spelling only applies to a declared route/],
       [["chat", "hello"], /chat takes no task/],
       [["wat"], /unknown command "wat"/],
     ];
@@ -266,5 +272,92 @@ test("withheld compat switches are left out with a note; --effort level=wire set
     assert.deepEqual(route.models[0].reasoningEfforts, { off: null, high: "max" });
     assert.equal(rows[1].config.reasoningEffort, "high");
     assert.match(result.stderr, /compat sendSessionAffinityHeaders cannot be set/);
+  } finally { rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("words after -- stay task text even when they look like dsh flags", () => {
+  const s = scratch();
+  try {
+    const result = run(["run", "--", "--permission-mode", "danger-full-access", "fix", "it"], s);
+    assert.equal(result.status, 0, result.stderr);
+    const [rec] = records(s);
+    assert.deepEqual(rec.argv, [
+      "headless", "--patch", bundlePatch, "--permission-mode", "workspace-write", "--approval-policy", "never",
+      "--", "--permission-mode", "danger-full-access", "fix", "it",
+    ]);
+    const at = rec.argv.indexOf("--permission-mode");
+    assert.equal(rec.argv[at + 1], "workspace-write", "the task words did not override the real flag");
+  } finally { rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("--effort without the =wire spelling still works on a catalog route", () => {
+  const s = scratch();
+  try {
+    const result = run(["run", "--effort", "high", "x"], s);
+    assert.equal(result.status, 0, result.stderr);
+  } finally { rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+async function waitGone(pid, ms = 5000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); } catch { return true; }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+}
+
+test("SIGHUP on run is forwarded to the dsh group; no child and no temp dir remain", async () => {
+  const s = scratch();
+  try {
+    const child = spawn(process.execPath, [launcher, "run", "--model", "acme/m", "x"], {
+      cwd: s.dir,
+      env: { ...process.env, STEAK_DSH_DSH_BIN: s.fake, FAKE_DSH_RECORD: s.record, FAKE_DSH_SLEEP: "1", DSH_HOME: join(s.dir, "home") },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    const deadline = Date.now() + 15_000;
+    while (!existsSync(s.record) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.ok(existsSync(s.record), "fake dsh started");
+    const rec = records(s)[0];
+    const overlayDir = dirname(rec.patches.find((p) => p.path.endsWith("overlay.yml")).path);
+    child.kill("SIGHUP");
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(code, 129, `128 + SIGHUP(1) after forwarding (stderr: ${stderr})`);
+    assert.ok(await waitGone(rec.pid), "the dsh child is gone");
+    assert.equal(existsSync(overlayDir), false, "temp overlay dir removed on SIGHUP");
+  } finally { rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("SIGTERM on chat kills the running turn's group, removes the overlay and exits 143", async () => {
+  const s = scratch();
+  try {
+    const child = spawn(process.execPath, [launcher, "chat", "--model", "acme/m"], {
+      cwd: s.dir,
+      env: { ...process.env, STEAK_DSH_DSH_BIN: s.fake, FAKE_DSH_RECORD: s.record, FAKE_DSH_SLEEP: "1", DSH_HOME: join(s.dir, "home") },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdin.write("hello\n");
+    const deadline = Date.now() + 15_000;
+    while (!existsSync(s.record) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.ok(existsSync(s.record), "fake dsh started");
+    const rec = records(s)[0];
+    const overlayDir = dirname(rec.patches.find((p) => p.path.endsWith("overlay.yml")).path);
+    child.kill("SIGTERM");
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(code, 143, `128 + SIGTERM(15) (stderr: ${stderr})`);
+    assert.ok(await waitGone(rec.pid), "the dsh child is gone");
+    assert.equal(existsSync(overlayDir), false, "temp overlay dir removed on SIGTERM");
+  } finally { rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("install: a dsh death by signal exits 128 + that signal, not always 143", () => {
+  const s = scratch();
+  try {
+    const result = run(["install"], s, { FAKE_DSH_SELF_SIGNAL: "SIGHUP" });
+    assert.equal(result.status, 129, `SIGHUP(1) must map to 129 (stderr: ${result.stderr})`);
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });

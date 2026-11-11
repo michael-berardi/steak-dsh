@@ -83,3 +83,90 @@ test("a passing check says so; reads, failed edits and unconfigured projects are
     } finally { if (saved === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = saved; }
   } finally { rmSync(dir, { recursive: true }); }
 });
+
+test("runCommand settles on exit even when a background job holds the pipes open", async () => {
+  const dir = scratch();
+  try {
+    const started = Date.now();
+    const result = await runCommand("sleep 30 & exit 1", dir, 5000);
+    const elapsed = Date.now() - started;
+    assert.equal(result.code, 1);
+    assert.equal(result.timedOut, false);
+    assert.ok(elapsed < 2000, `resolved in ${elapsed} ms, under 2 s`);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+test("runCommand: a command that ignores TERM still resolves within 1 s of the timeout", async () => {
+  const dir = scratch();
+  try {
+    const started = Date.now();
+    const result = await runCommand("trap '' TERM; sleep 30", dir, 300);
+    const elapsed = Date.now() - started;
+    assert.equal(result.timedOut, true);
+    assert.ok(elapsed < 1300, `resolved in ${elapsed} ms (timeout 300 ms + under 1 s)`);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+const fullHarness = (config, cwd, { noPreStep = false } = {}) => {
+  const handlers = {};
+  apply({
+    on: (name, fn) => {
+      if (noPreStep && name === "agent/pre-step") throw new Error(`unknown event ${name}`);
+      handlers[name] = fn;
+    },
+    get: () => ({ get: () => cwd }),
+  }, config);
+  return handlers;
+};
+
+test("a run cut short by an abort is not a failure and is not counted", async () => {
+  const dir = scratch();
+  try {
+    const post = fullHarness({ command: "sleep 0.5", failLimit: 1 }, dir)["tools/post-execute"];
+    const agent = { session: {} };
+    const controller = new AbortController();
+    const aborted = { name: "edit", agent, signal: controller.signal };
+    setTimeout(() => controller.abort(), 300); // after the 150 ms debounce, while the command runs
+    const first = await post(aborted, { isError: false }, accept);
+    assert.equal(first.additionalContexts, undefined, "an aborted run leaves the decision unchanged");
+    const second = await post(exec("edit", agent), { isError: false }, accept);
+    assert.match(second.additionalContexts[0].content[0].text, /verify passed/, "the abort did not use up the fail limit");
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+test("after the fail limit verification pauses for that turn only and resumes on the next turn", async () => {
+  const dir = scratch();
+  try {
+    const handlers = fullHarness({ command: "echo broken; exit 1", failLimit: 2 }, dir);
+    const post = handlers["tools/post-execute"];
+    const pre = handlers["agent/pre-step"];
+    assert.ok(pre, "agent/pre-step listener registered");
+    const agent = { session: {} };
+    const sentinel = { kind: "accept" };
+    assert.equal(pre({ agent, turn: 1, step: 1 }, () => sentinel), sentinel, "waterfall returns next() unchanged");
+    const first = await post(exec("edit", agent), { isError: false }, accept);
+    assert.match(first.additionalContexts[0].content[0].text, /attempt 1\/2/);
+    assert.equal(first.additionalContexts[0].content[0].text.includes("paused"), false);
+    const second = await post(exec("edit", agent), { isError: false }, accept);
+    assert.match(second.additionalContexts[0].content[0].text, /attempt 2\/2/);
+    assert.match(second.additionalContexts[0].content[0].text, /Verification is paused until your next request\./);
+    assert.equal((await post(exec("edit", agent), { isError: false }, accept)).additionalContexts, undefined, "paused");
+    pre({ agent, turn: 1, step: 2 }, () => sentinel);
+    assert.equal((await post(exec("edit", agent), { isError: false }, accept)).additionalContexts, undefined, "same turn stays paused");
+    pre({ agent, turn: 2, step: 1 }, () => sentinel);
+    const resumed = await post(exec("edit", agent), { isError: false }, accept);
+    assert.match(resumed.additionalContexts[0].content[0].text, /attempt 1\/2/, "a new turn resets the count");
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+test("a harness without agent/pre-step still loads the plugin", async () => {
+  const dir = scratch();
+  try {
+    const handlers = fullHarness({ command: "true" }, dir, { noPreStep: true });
+    assert.equal(handlers["agent/pre-step"], undefined);
+    const post = handlers["tools/post-execute"];
+    assert.ok(post, "tools/post-execute still registered");
+    const result = await post(exec("edit", { session: {} }), { isError: false }, accept);
+    assert.match(result.additionalContexts[0].content[0].text, /verify passed/);
+  } finally { rmSync(dir, { recursive: true }); }
+});

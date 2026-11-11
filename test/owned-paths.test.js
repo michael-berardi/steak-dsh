@@ -107,3 +107,13 @@ test("apply(): empty or missing paths registers nothing", () => {
     assert.equal(harness({ paths: ["", "  "] }, dir), undefined);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("outside(): an owned filesystem root contains everything", () => {
+  assert.equal(outside("/tmp/some/deep/file.txt", "/", ["/"]), false, "root owns any absolute path");
+  assert.equal(outside("/", "/", ["/"]), false, "root owns itself");
+  assert.equal(outside("relative.txt", "/", ["/"]), false, "relative paths resolve under root");
+  const dir = scratch();
+  try {
+    assert.equal(outside(join(dir, "x.txt"), dir, ["/"]), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

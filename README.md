@@ -4,12 +4,16 @@ Steak DSH is a plugin bundle for [DeepSeek Harness](https://github.com/deepseek-
 one-shot coding tasks cost less on the same model, and adds a check after every edit, owned paths for file edits, and
 a launcher that picks the model with flags.
 
-Measured against stock DSH 0.2.2-rc.1 on the same model, every run correct in both:
+Cost against stock DSH 0.2.2-rc.1 on the same model, every run correct in both:
 
-| Model | Steak DSH / stock DSH | 95% interval | Steak DSH cheaper in |
+| Model and run | Steak DSH / stock DSH | 95% interval | Steak DSH cheaper in |
 |---|---|---|---|
-| DeepSeek V4.1 Flash (dollars) | 0.87 | 0.80 to 0.94 | 108 of 160 pairs, two runs |
+| DeepSeek V4.1 Flash, first run (the one the gate was written for) | 0.84 | 0.76 to 0.93 | 73 of 100 pairs |
+| DeepSeek V4.1 Flash, second run | 0.92 | 0.81 to 1.06 | 35 of 60 pairs |
 | Qwen 4 Max (weighted tokens) | 0.70 | 0.62 to 0.78 | 78 of 100 pairs |
+
+The second DeepSeek run does not show a clear saving on its own. Both runs together give 0.87 (0.80 to 0.94) over
+160 pairs; that pooling was decided after seeing the second run.
 
 MIT. No dependencies. By [Pareto Cybernetics](https://paretocybernetics.com).
 
@@ -20,7 +24,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.1.1
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.1.2
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -29,7 +33,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.1.1
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.1.1
+npm i -g github:michael-berardi/steak-dsh#v0.1.2
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -40,7 +44,7 @@ steak-dsh run "fix the failing test in src/parser"
 |---|---|---|
 | Lean tool set | Removes the tools a one-shot coding task does not use (goals, workflows, subagents, working-directory switch): 13 tools instead of 23 sent with every request. Skips the model-written session title. | on |
 | Working rules | Six lines in the system prompt: batch independent tool calls, gather context once, compute on large files instead of reading them, check a change once, finish every part, keep the reply short. | on |
-| Verify after edit | After a file edit, runs your project's check command and hands a failure straight back to the model with the edit result. Stops after two failures in a row. | on, does nothing until you set a command |
+| Verify after edit | After a file edit, runs your project's check command and hands a failure straight back to the model with the edit result. After two failures in a row it pauses until your next request. | on, does nothing until you set a command |
 | Owned paths | Refuses file edits outside the paths a task owns. Symlinks are resolved first. | per run, `--owned-path` |
 | Finish guard | Keeps the turn open when the todo list has open items or the reply reports unfinished work. | off |
 
@@ -108,7 +112,8 @@ The gate was written before the first run ([GATE.md](GATE.md)).
 | **Steak DSH 0.1.0** | 100/100 | **$0.00089** | **17.5 s** | **0.84** (0.76 to 0.93) |
 | Steak Pi 0.25.7 | 100/100 | $0.00121 | 18.2 s | 1.14 (0.99 to 1.29) |
 
-Steak DSH against Steak Pi on this model: cost 0.74 (0.65 to 0.84), time 0.82 (0.73 to 0.92).
+Steak DSH against Steak Pi on this model: cost 0.74 (0.65 to 0.84), total time 0.82 (0.73 to 0.92). The time ratio
+compares total seconds over all runs; the table shows medians, which are closer.
 
 **Qwen 4 Max**, 300 runs. The plan is flat-rate, so cost is weighted tokens (input 1, cached input 0.1, output 4).
 
@@ -118,8 +123,8 @@ Steak DSH against Steak Pi on this model: cost 0.74 (0.65 to 0.84), time 0.82 (0
 | **Steak DSH 0.1.0** | 100/100 | 13,395 | 42.1 s | **0.70** (0.62 to 0.78) |
 | Steak Pi 0.25.7 | 100/100 | **12,807** | **30.9 s** | 0.67 (0.60 to 0.74) |
 
-Steak DSH against Steak Pi on this model: weighted tokens 1.05 (0.96 to 1.15), time 1.26 (1.12 to 1.42). Steak Pi is
-faster here.
+Steak DSH against Steak Pi on this model: weighted tokens 1.05 (0.96 to 1.15), total time 1.26 (1.12 to 1.42). Steak
+Pi is faster here.
 
 **Claude Haiku 5.5**, 80 runs. DSH has no route to Claude models, so this table compares Steak Pi and Claude Code.
 
@@ -138,14 +143,15 @@ Flash, 240 runs, three repeats)
 | Stock DSH 0.2.2-rc.1 | 60/60 | $0.00095 | 20.4 s | 1.59 (1.44 to 1.74) |
 | Steak Pi 0.25.7 | 60/60 | $0.00122 | 22.5 s | 2.04 (1.71 to 2.37) |
 
-In this run Steak DSH against stock DSH was 0.92 (0.81 to 1.06). Over both runs together, 160 pairs: 0.87 (0.80 to
-0.94).
+In this run Steak DSH against stock DSH was 0.92 (0.81 to 1.06). Taken alone, that does not meet condition 2 of the
+gate, because the interval reaches 1.00. Over both runs together, 160 pairs, it is 0.87 (0.80 to 0.94). The gate
+named the first run as the verdict sample; pooling the two is an analysis chosen afterwards.
 
 What the data says:
 
-- Steak DSH costs less than stock DSH. On Qwen 4 Max the whole interval is below 1.00. On DeepSeek V4.1 Flash the
-  first run (100 pairs) gave 0.84 and the second (60 pairs) gave 0.92 with an interval that reaches 1.00; pooled it is
-  0.87 with the interval below 1.00. Expect a saving of about a tenth on that model, not a sixth.
+- Steak DSH costs less than stock DSH on Qwen 4 Max, with the whole interval below 1.00. On DeepSeek V4.1 Flash the
+  gated run shows a saving (0.84) and the second run does not show a clear one (0.92, interval to 1.06). Expect about
+  a tenth on that model, and treat it as likely, not settled.
 - Stock Pi is the cheapest and fastest harness on these short tasks, ahead of every DSH variant and of Steak Pi. The
   tools Steak Pi adds are overhead on a 20-second task; they are built for long sessions, which this task set does not
   measure.
@@ -154,8 +160,14 @@ What the data says:
 - Every harness solved every task on the two open models, so these tasks measure cost and time. They do not show a
   difference in what the harnesses can solve.
 
-Where the saving comes from (ablation, 40 pairs on DeepSeek V4.1 Flash): the lean tool set alone 0.93 (0.81 to 1.06),
-lean tools plus the working rules 0.79 (0.67 to 0.95). The finish guard never had to act in 100 runs, so it ships off.
+Where the saving comes from (ablations, fewer pairs, so wide intervals): on DeepSeek V4.1 Flash the lean tool set
+alone gave 0.93 (0.81 to 1.06) and lean tools plus the working rules 0.79 (0.67 to 0.95), 40 pairs each. On Qwen 4 Max
+the lean tool set alone gave 0.80 (0.69 to 0.92) and the rules alone 0.86 (0.76 to 0.97), 20 pairs each. The lean tool
+set ships on because of its effect on Qwen 4 Max; on DeepSeek V4.1 Flash it is not shown to help alone. The finish
+guard was switched on for 40 Steak DSH runs and never acted, so it ships off. Ablation rows are not published.
+
+The tables are for the bundle as released in 0.1.0. Later versions change the launcher and verify-after-edit, which
+the benchmark does not exercise, and leave the measured bundle rows as they were.
 
 Limits: 20 small tasks in one language on one machine. Runs were three at a time, so wall times are noisy. Two repeats
 were planned; a first look gave 0.89 (0.78 to 1.02) on DeepSeek V4.1 Flash, so the sample was extended once to a fixed
@@ -182,6 +194,6 @@ Plugins run inside the `dsh` process. Owned paths gate the file-editing tools, n
 ## Development
 
 ```sh
-npm test                    # 35 tests, Node built-ins only
+npm test                    # 49 tests, Node built-ins only
 python3 benchmarks/selftest.py   # 20 tasks: check fails untouched, passes on the reference solution
 ```

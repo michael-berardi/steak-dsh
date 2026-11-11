@@ -114,3 +114,31 @@ test("chat: two scripted turns; the second turn continues the first turn's sessi
     assert.equal(existsSync(overlay.path), false, "overlay removed when chat exits");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("chat: a line that looks like a flag (--help) is sent as task text after --", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "steak-dsh-chat-test-"));
+  try {
+    const fake = join(dir, "fake-dsh.mjs");
+    const record = join(dir, "record.jsonl");
+    writeFileSync(fake, FAKE_DSH, { mode: 0o755 });
+    const child = spawn(process.execPath, [launcher, "chat", "--model", "acme/m"], {
+      cwd: dir,
+      env: { ...process.env, STEAK_DSH_DSH_BIN: fake, FAKE_DSH_RECORD: record, DSH_HOME: join(dir, "home") },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdin.write("--help\n/exit\n");
+    const code = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`chat timed out; stdout: ${stdout}`)); }, 30_000);
+      child.on("close", (c) => { clearTimeout(timer); resolve(c); });
+    });
+    assert.equal(code, 0, stderr);
+    const turns = readFileSync(record, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(turns.length, 1);
+    const at = turns[0].argv.indexOf("--");
+    assert.ok(at >= 0, "the task words are separated by --");
+    assert.deepEqual(turns[0].argv.slice(at), ["--", "--help"], "--help is task text, not a dsh flag");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

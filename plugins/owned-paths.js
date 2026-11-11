@@ -52,7 +52,9 @@ export function outside(target, cwd, ownedPaths) {
   return !ownedPaths.some((owned) => {
     if (typeof owned !== "string" || !owned.trim()) return false;
     const boundary = realPath(resolve(cwd ?? process.cwd(), owned));
-    return real === boundary || real.startsWith(boundary + sep);
+    // The filesystem root already ends with the separator; boundary + sep would become "//" and match nothing.
+    const prefix = boundary.endsWith(sep) ? boundary : boundary + sep;
+    return real === boundary || real.startsWith(prefix);
   });
 }
 

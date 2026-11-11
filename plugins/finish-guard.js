@@ -33,7 +33,7 @@ const OPEN_WORK = [
   /\bwhat'?s left\b/i,
   /\bnot yet (?:fixed|done|addressed)\b/i,
 ];
-const USER_STOP = /^\s*(?:hold|stop|pause)\b|\b(?:just|only) answer\b|\bdon'?t (?:do|change|touch) anything\b|\bno changes\b/i;
+const USER_STOP = /^\s*(?:hold|stop|pause)\b|\b(?:just|only) answer\b|\b(?:don'?t|do not) (?:do|change|touch|make) anything\b|\b(?:don'?t|do not) make any (?:edits|changes)\b|\bno (?:more )?(?:changes|edits)\b|\bstop (?:here|now|please)\b|\bstop\s*[.!?]*\s*$/i;
 const QUOTED = /```[\s\S]*?```|`[^`\n]*`|"[^"\n]{0,200}"|“[^”\n]{0,200}”/g;
 const DONE = new Set(["done", "completed", "dropped", "cancelled", "canceled"]);
 
@@ -83,7 +83,8 @@ export function readTurn(session, turn) {
     if (event.type === "assistant/message" && finalText === undefined) finalText = textOf(event.data?.message?.content);
     else if (event.type === "todo/write" && todos === undefined) todos = event.data?.todos;
     else if (event.type === "user/message" && event.data?.source?.kind === "user" && userText === undefined) userText = textOf(event.data.content);
-    if (event.type === "turn/start" && event.data?.turn === turn && todos !== undefined) break;
+    // The current turn's start is a hard boundary: never read a todo list or reply from an earlier turn.
+    if (event.type === "turn/start" && event.data?.turn === turn) break;
     if (seq < session.seq - 4000) break; // bounded scan; a todo list older than this is treated as absent
   }
   return { finalText: finalText ?? "", userText: userText ?? "", todos: todos ?? [] };

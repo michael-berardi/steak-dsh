@@ -73,3 +73,26 @@ test("plugin does nothing when finished, aborted or disabled", () => {
   assert.equal(steered.length, 0);
   assert.equal(harness({ enabled: false }), undefined);
 });
+
+test("readTurn stops at the current turn's start even when this turn has no todo list", () => {
+  const s = session([
+    { type: "turn/start", data: { turn: 1 } }, user("old request"), todos([{ content: "x", status: "pending" }]), reply("old reply"),
+    { type: "turn/start", data: { turn: 2 } }, user("new request"), reply("new reply"),
+  ]);
+  const facts = readTurn(s, 2);
+  assert.equal(facts.finalText, "new reply");
+  assert.equal(facts.userText, "new request");
+  assert.deepEqual(facts.todos, [], "an earlier turn's todo list is never read");
+});
+
+test("USER_STOP covers explicit stop wording but not ordinary requests about stopping", () => {
+  const base = { todos: [{ content: "b", status: "pending" }], finalText: "ok", pushes: 0 };
+  const stops = ["Please stop here.", "don't make any edits", "do not change anything", "stop.", "that's enough, stop", "no more changes"];
+  for (const userText of stops) {
+    assert.equal(finishVerdict({ ...base, userText }).block, false, `should not push on: ${userText}`);
+  }
+  const requests = ["fix the stop button", "make the service stop gracefully"];
+  for (const userText of requests) {
+    assert.equal(finishVerdict({ ...base, userText }).block, true, `should still push on: ${userText}`);
+  }
+});
