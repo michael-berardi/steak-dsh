@@ -192,8 +192,11 @@ if [[ "$SKIP" != *,pwsh,* ]]; then
     docker tag "mcr.microsoft.com/powershell@$pwsh_digest" "$PWSH_IMAGE"
   fi
   # shellcheck disable=SC2016  # single quotes are deliberate: this is PowerShell, not shell
+  # NODE_OPTIONS caps the Node heap: under x64 emulation on a small Docker VM the dsh npm install
+  # can otherwise be OOM-killed when other containers are busy.
   docker run --rm --name steak-dsh-test-pwsh --platform linux/amd64 -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
     -e STEAK_DSH_RELEASE_BASE="$DOCKER_BASE/good" -e npm_config_cache=/npmcache \
+    -e NODE_OPTIONS=--max-old-space-size=768 \
     "$PWSH_IMAGE" pwsh -NoProfile -Command '
       $ErrorActionPreference = "Stop"
       & /scripts/install.ps1
