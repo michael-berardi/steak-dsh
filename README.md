@@ -106,7 +106,8 @@ Long, multi-step or delegating work is the opposite case, so it has its own swit
 steak-dsh run --long --verify "npm test" "migrate the store package to the new client, then update the callers"
 ```
 
-`--long` adds five rows after the bundle and changes nothing when it is absent:
+`--long` applies one more shipped patch, [`long.patch.yml`](long.patch.yml), right after the bundle, and changes
+nothing when it is absent:
 
 ```yaml
 - id: tool-subagent            # delegate a bounded part to a child
@@ -122,6 +123,7 @@ steak-dsh run --long --verify "npm test" "migrate the store package to the new c
     maxInlineTokens: 12500
 ```
 
+Without the launcher it is one more `--patch`: `dsh headless --patch cordis.patch.yml --patch long.patch.yml "<task>"`.
 Put the same rows in your profile patch to make them permanent. Measured on dsh 0.2.2-rc.1 against a local scripted
 endpoint (no model call): the first request carries 23 tools and 22,890 bytes on stock dsh, 13 tools and 12,532 bytes
 with the bundle, and 18 tools and 16,167 bytes with `--long`. That is the price of the profile per request. Whether

@@ -6,9 +6,10 @@
   Linux) download the release, check its SHA-256, bring Node 22 and DeepSeek Harness when missing, add the bundle
   to the dsh headless profile, and finish with `steak-dsh doctor`. `scripts/build-release.sh` builds the release
   assets; `scripts/test-install.sh` tests both dsh branches on macOS, in an Ubuntu container, and under pwsh.
-- `--long` (run and chat): a long-work profile. It gives back the subagent tool, its follow-up tool and the
-  working-directory switch, turns the finish guard on and states the spill budget. The default profile is unchanged:
-  without the flag no extra row is generated. Refused with `--stock`.
+- `--long` (run and chat): a long-work profile, shipped as `long.patch.yml` and applied right after the bundle. It
+  gives back the subagent tool, its follow-up tool and the working-directory switch, turns the finish guard on and
+  states the spill budget. The default profile is unchanged: without the flag nothing extra is passed. Refused with
+  `--stock`. A direct `dsh` run uses the same file with one more `--patch`.
 - Finish guard: a subagent child is no longer pushed (the guard was documented that way but pushed every agent).
   `subagents: true` on the row restores the old behaviour.
 

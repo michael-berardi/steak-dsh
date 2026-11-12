@@ -30,6 +30,7 @@
     "bin",
     "lib",
     "cordis.patch.yml",
+    "long.patch.yml",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const launcher = join(root, "bin", "steak-dsh");
 const bundlePatch = join(root, "cordis.patch.yml");
-const { LONG_PROFILE_ROWS, buildRows } = await import(join(root, "lib", "overlay.js"));
+const { LONG_PROFILE_PATCH, buildRows } = await import(join(root, "lib", "overlay.js"));
+const longPatch = join(root, LONG_PROFILE_PATCH);
 
 const FAKE_DSH = `#!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
@@ -363,22 +364,17 @@ test("install: a dsh death by signal exits 128 + that signal, not always 143", (
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 
-test("--long: the long-work profile rows are generated after the bundle; the default run is unchanged", () => {
+test("--long: the shipped profile patch is applied right after the bundle; the default run is unchanged", () => {
   const s = scratch();
   try {
     const long = run(["run", "--long", "--verify", "npm test", "a", "long", "task"], s);
     assert.equal(long.status, 0, long.stderr);
     const [rec] = records(s);
-    assert.equal(rec.patches[0].path, bundlePatch, "bundle patch first, so the profile rows override it");
-    const { rows } = generated(rec);
-    assert.deepEqual(rows, [
-      { id: "tool-subagent", disabled: false },
-      { id: "tool-subagent-control", disabled: false },
-      { id: "tool-working-directory", disabled: false },
-      { id: "steak-finish-guard", disabled: false },
-      { id: "spill-policy", config: { maxInlineTokens: 12500 } },
-      { id: "steak-verify-after-edit", config: { command: "npm test" } },
-    ]);
+    assert.deepEqual(rec.argv.slice(0, 5), ["headless", "--patch", bundlePatch, "--patch", longPatch], "bundle first, then the profile");
+    assert.equal(rec.patches[1].content, readFileSync(longPatch, "utf8"), "the shipped file is passed unchanged");
+    const { patch, rows } = generated(rec);
+    assert.equal(rec.patches.indexOf(patch), 2, "flag rows come after the profile, so --verify and --no-shell still apply");
+    assert.deepEqual(rows, [{ id: "steak-verify-after-edit", config: { command: "npm test" } }]);
     assert.deepEqual(rec.argv.slice(-4), ["--", "a", "long", "task"]);
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
   const d = scratch();
@@ -387,26 +383,28 @@ test("--long: the long-work profile rows are generated after the bundle; the def
     assert.equal(plain.status, 0, plain.stderr);
     const [rec] = records(d);
     assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "workspace-write", "--approval-policy", "never", "--", "hello"],
-      "without --long no generated overlay is passed at all");
+      "without --long neither the profile nor a generated overlay is passed");
   } finally { rmSync(d.dir, { recursive: true, force: true }); }
 });
 
-test("--long only switches rows the bundle ships switched the other way, and never goal or workflow tools", () => {
-  const bundle = readFileSync(bundlePatch, "utf8");
-  const disabledByBundle = new Set([...bundle.matchAll(/- id: (\S+)\n\s+(?:name: \S+\n\s+)?disabled: true/g)].map((m) => m[1]));
-  const enabled = LONG_PROFILE_ROWS.filter((row) => row.disabled === false).map((row) => row.id);
+test("the long-work profile only switches rows the bundle ships switched the other way, and never goal or workflow tools", () => {
+  const ids = (text, state) => new Set([...text.matchAll(new RegExp(`- id: (\\S+)\\n(?:\\s+name: \\S+\\n)?\\s+disabled: ${state}`, "g"))].map((m) => m[1]));
+  const disabledByBundle = ids(readFileSync(bundlePatch, "utf8"), "true");
+  const profile = readFileSync(longPatch, "utf8");
+  const enabled = [...ids(profile, "false")];
   assert.deepEqual(enabled, ["tool-subagent", "tool-subagent-control", "tool-working-directory", "steak-finish-guard"]);
-  for (const id of enabled) assert.ok(disabledByBundle.has(id), `${id} is off in the bundle, so --long has something to turn on`);
+  for (const id of enabled) assert.ok(disabledByBundle.has(id), `${id} is off in the bundle, so the profile has something to turn on`);
+  assert.equal(ids(profile, "true").size, 0, "the profile switches nothing off");
   for (const id of ["tool-goal", "goal-round-driver", "command-goal", "tool-workflow", "tool-subagent-fork", "session-title-llm"]) {
     assert.ok(disabledByBundle.has(id), `${id} stays off in the bundle`);
-    assert.equal(LONG_PROFILE_ROWS.some((row) => row.id === id), false, `${id} is not part of the long-work profile`);
+    assert.equal(new RegExp(`- id: ${id}\\b`).test(profile), false, `${id} is not part of the long-work profile`);
   }
-  const rows = buildRows({ long: true, noShell: true, ownedPaths: [], patches: [] }, root);
-  assert.deepEqual(rows.slice(-3), [{ id: "tool-bash", disabled: true }, { id: "tool-pwsh", disabled: true }, { id: "tool-jobs", disabled: true }],
-    "--no-shell still applies on top of --long");
-  rows[0].disabled = true;
-  assert.equal(LONG_PROFILE_ROWS[0].disabled, false, "generated rows are copies; the profile constant cannot be edited by a caller");
-  assert.equal(/qwen|deepseek-v|openrouter|claude|gpt-|opus|sonnet|haiku|anthropic|openai/i.test(JSON.stringify(LONG_PROFILE_ROWS)), false, "the profile names no model or provider");
+  assert.match(profile, /- id: spill-policy\n\s+config:\n\s+maxInlineTokens: 12500\n/);
+  assert.deepEqual([...profile.matchAll(/^- id: (\S+)/gm)].map((m) => m[1]),
+    ["tool-subagent", "tool-subagent-control", "tool-working-directory", "steak-finish-guard", "spill-policy"], "exactly these five rows");
+  assert.deepEqual(buildRows({ long: true, noShell: true, ownedPaths: [], patches: [] }, root),
+    [{ id: "tool-bash", disabled: true }, { id: "tool-pwsh", disabled: true }, { id: "tool-jobs", disabled: true }],
+    "the profile adds no generated row; --no-shell still does");
 });
 
 test("--long with --stock is refused by name; chat accepts --long", async () => {

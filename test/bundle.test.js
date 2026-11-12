@@ -14,7 +14,8 @@ test("the package is a dsh bundle and ships every file its patch names", () => {
   const names = [...patch.matchAll(/name:\s*(\.\/\S+)/g)].map((m) => m[1]);
   assert.ok(names.length >= 3);
   for (const name of names) assert.ok(existsSync(join(root, name)), `${name} missing`);
-  for (const entry of ["plugins", "cordis.patch.yml"]) assert.ok(pkg.files.includes(entry));
+  for (const entry of ["plugins", "cordis.patch.yml", "long.patch.yml"]) assert.ok(pkg.files.includes(entry));
+  assert.ok(existsSync(join(root, "long.patch.yml")), "long.patch.yml missing");
 });
 
 test("plugins import nothing outside Node, so they load from any profile", () => {
@@ -26,7 +27,7 @@ test("plugins import nothing outside Node, so they load from any profile", () =>
 
 test("shipped code names no model or provider", () => {
   const banned = /qwen|deepseek-v|openrouter|claude|gpt-|opus|sonnet|haiku|anthropic|openai/i;
-  for (const file of [...readdirSync(join(root, "plugins")).map((f) => join("plugins", f)), "cordis.patch.yml"]) {
+  for (const file of [...readdirSync(join(root, "plugins")).map((f) => join("plugins", f)), "cordis.patch.yml", "long.patch.yml"]) {
     const source = readFileSync(join(root, file), "utf8");
     assert.equal(banned.exec(source), null, `${file} names ${banned.exec(source)?.[0]}`);
   }
