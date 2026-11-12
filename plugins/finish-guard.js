@@ -3,7 +3,7 @@
  *
  * Runs on `agent/turn-stopping`, the hook DSH offers before a completed turn closes. It keeps the turn open
  * (one steering message) when the todo list has unfinished items or the final reply reports unfinished work.
- * At most `maxPushes` times per turn, never for subagents unless asked, never when the user asked to stop.
+ * At most `maxPushes` times per turn, never for subagents unless asked (`subagents: true`), never when the user asked to stop.
  * No imports from the harness, so it loads from a bundle, a profile patch or a plain file path.
  */
 import { randomUUID } from "node:crypto";
@@ -90,6 +90,15 @@ export function readTurn(session, turn) {
   return { finalText: finalText ?? "", userText: userText ?? "", todos: todos ?? [] };
 }
 
+/**
+ * True for a session a subagent tool created. A delegated child reports to its parent, which checks the result, so
+ * the guard leaves it alone unless the row sets `subagents: true`. Reads the session header the harness keeps.
+ */
+export function isSubagent(agent) {
+  const header = agent?.session?.header ?? agent?.session?.meta;
+  return header?.origin === "subagent" || (Number.isInteger(header?.delegationDepth) && header.delegationDepth > 0);
+}
+
 export function steeringMessage(text, summary) {
   const message = {
     role: "user",
@@ -107,6 +116,7 @@ export function apply(ctx, config = {}) {
   const pushes = new WeakMap(); // agent -> { turn, count }
   ctx.on("agent/turn-stopping", ({ agent, turn, signal }) => {
     if (signal.aborted) return;
+    if (config.subagents !== true && isSubagent(agent)) return;
     const state = pushes.get(agent);
     const count = state?.turn === turn ? state.count : 0;
     let facts;

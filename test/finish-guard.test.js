@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { apply, finishVerdict, openTodos, openWorkPhrases, readTurn, MARK } from "../plugins/finish-guard.js";
+import { apply, finishVerdict, isSubagent, openTodos, openWorkPhrases, readTurn, MARK } from "../plugins/finish-guard.js";
 
 const session = (events) => ({ seq: events.length, eventAt: (i) => events[i] });
 const user = (text) => ({ type: "user/message", data: { source: { kind: "user" }, content: [{ type: "text", text }] } });
@@ -94,5 +94,28 @@ test("USER_STOP covers explicit stop wording but not ordinary requests about sto
   const requests = ["fix the stop button", "make the service stop gracefully"];
   for (const userText of requests) {
     assert.equal(finishVerdict({ ...base, userText }).block, true, `should still push on: ${userText}`);
+  }
+});
+
+test("a subagent child is left alone unless the row asks for it", () => {
+  const events = [{ type: "turn/start", data: { turn: 1 } }, user("do it"), reply("Remaining items: b")];
+  const child = (header) => {
+    const steered = [];
+    return { steered, agent: { session: { ...session(events), header }, steer: (m) => steered.push(m) } };
+  };
+  const signal = { aborted: false };
+  for (const header of [{ origin: "subagent" }, { delegationDepth: 1 }, { origin: "subagent", delegationDepth: 2 }]) {
+    const c = child(header);
+    assert.equal(isSubagent(c.agent), true);
+    harness({})({ agent: c.agent, turn: 1, signal });
+    assert.equal(c.steered.length, 0, `no push for ${JSON.stringify(header)}`);
+    harness({ subagents: true })({ agent: c.agent, turn: 1, signal });
+    assert.equal(c.steered.length, 1, "subagents: true pushes a child too");
+  }
+  for (const header of [undefined, {}, { delegationDepth: 0 }, { parentSession: "an-ordinary-fork" }]) {
+    const root = child(header);
+    assert.equal(isSubagent(root.agent), false);
+    harness({})({ agent: root.agent, turn: 1, signal });
+    assert.equal(root.steered.length, 1, `a top-level session is still pushed for ${JSON.stringify(header)}`);
   }
 });
