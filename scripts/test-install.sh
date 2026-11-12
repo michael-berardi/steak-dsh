@@ -95,9 +95,17 @@ if [ "$(uname -s)" = Darwin ] && [[ "$SKIP" != *,mac,* ]]; then
   got=$(PATH="/usr/bin:/bin" "$H/bin/steak-dsh" --version)
   [ "$got" = "$VERSION" ] || fail "macOS re-run: version '$got' != $VERSION"
 
-  say "macOS branch B: a working dsh already on PATH (and a new-enough Node)"
-  H2="$WORK/mac-b"; mkdir -p "$H2/home"
-  env -i HOME="$H2/home" PATH="$H/home/.steak-dsh/node/bin:$H/bin:/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="$WORK/tmp" \
+  say "macOS branch B: a working dsh already on PATH (and a new-enough Node), installed by the user"
+  H2="$WORK/mac-b"; mkdir -p "$H2/home" "$WORK/mac-b-dsh"
+  # The user's own dsh: a separate npm prefix, not the shim branch A wrote. Its HOME is the test HOME.
+  env -i HOME="$H2/home" PATH="$H/home/.steak-dsh/node/bin:/usr/bin:/bin" TMPDIR="$WORK/tmp" \
+    npm_config_cache="$npm_config_cache" npm_config_update_notifier=false npm_config_fund=false \
+    "$H/home/.steak-dsh/node/bin/npm" install --prefix "$WORK/mac-b-dsh" "@deepseek-ai/dsh@0.2.2-rc.1" \
+    --no-audit --no-fund --loglevel=error </dev/null >"$WORK/logs/mac-b-dsh-install.log" 2>&1 \
+    || { tail -20 "$WORK/logs/mac-b-dsh-install.log"; fail "macOS branch B: could not install the user's dsh"; }
+  env -i HOME="$H2/home" PATH="$H/home/.steak-dsh/node/bin:$WORK/mac-b-dsh/node_modules/.bin:/usr/bin:/bin" \
+    dsh --version </dev/null >/dev/null 2>&1 || fail "macOS branch B: the user's dsh does not run"
+  env -i HOME="$H2/home" PATH="$H/home/.steak-dsh/node/bin:$WORK/mac-b-dsh/node_modules/.bin:/usr/bin:/bin" TMPDIR="$WORK/tmp" \
     npm_config_cache="$npm_config_cache" STEAK_DSH_RELEASE_BASE="$BASE/good" \
     STEAK_DSH_HOME="$H2/home/.steak-dsh" STEAK_DSH_BIN_DIR="$H2/bin" \
     sh scripts/install.sh >"$WORK/logs/mac-b.log" 2>&1 || { tail -30 "$WORK/logs/mac-b.log"; fail "macOS branch B install"; }
@@ -180,23 +188,23 @@ fi
 
 # ---------------------------------------------------------------- PowerShell 7 (Linux container)
 if [[ "$SKIP" != *,pwsh,* ]]; then
-  say "pwsh: install.ps1 in mcr.microsoft.com/powershell (no Node in the image)"
-  # The powershell image ships only amd64 and armv7 (no arm64), so pin the amd64 variant by digest:
-  # native on x64 hosts, emulated on arm64 hosts (slower; the dsh npm install can take several minutes).
-  PWSH_IMAGE="steak-dsh-pwsh-test:amd64"
-  if [ "$(docker image inspect "$PWSH_IMAGE" --format '{{.Architecture}}' 2>/dev/null || true)" != amd64 ]; then
-    pwsh_digest=$(docker manifest inspect mcr.microsoft.com/powershell:latest \
-      | python3 -c 'import json,sys; m=json.load(sys.stdin); print(next(x["digest"] for x in m["manifests"] if x["platform"]["architecture"]=="amd64" and x["platform"]["os"]=="linux"))') \
-      || fail "cannot resolve the amd64 powershell image digest"
-    docker pull "mcr.microsoft.com/powershell@$pwsh_digest" || fail "cannot pull the amd64 powershell image"
-    docker tag "mcr.microsoft.com/powershell@$pwsh_digest" "$PWSH_IMAGE"
+  say "pwsh: install.ps1 in a PowerShell 7.4.6 container (no Node in the image)"
+  # mcr.microsoft.com/powershell has no arm64 variant on this host, so the image is ubuntu:24.04 plus Microsoft's
+  # official PowerShell 7.4.6 tarball for the native CPU (arm64 or x64), built once from this recipe and tagged locally.
+  PWSH_IMAGE="pwsh-install-test:7.4.6"
+  if ! docker image inspect "$PWSH_IMAGE" >/dev/null 2>&1; then
+    docker build -q -t "$PWSH_IMAGE" - >/dev/null <<'DOCKERFILE' || fail "cannot build the PowerShell 7.4.6 test image"
+FROM ubuntu:24.04
+RUN apt-get update -qq && apt-get install -y -qq ca-certificates curl libicu74 >/dev/null \
+ && case "$(uname -m)" in aarch64) a=arm64 ;; x86_64) a=x64 ;; *) echo "unsupported CPU $(uname -m)" >&2; exit 1 ;; esac \
+ && curl -fsSL --retry 3 -o /tmp/ps.tgz "https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-$a.tar.gz" \
+ && mkdir -p /opt/powershell && tar -xzf /tmp/ps.tgz -C /opt/powershell && chmod +x /opt/powershell/pwsh \
+ && ln -s /opt/powershell/pwsh /usr/bin/pwsh && rm /tmp/ps.tgz
+DOCKERFILE
   fi
   # shellcheck disable=SC2016  # single quotes are deliberate: this is PowerShell, not shell
-  # NODE_OPTIONS caps the Node heap: under x64 emulation on a small Docker VM the dsh npm install
-  # can otherwise be OOM-killed when other containers are busy.
-  docker run --rm --name steak-dsh-test-pwsh --platform linux/amd64 -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
+  docker run --rm --name steak-dsh-test-pwsh -v "$ROOT/scripts:/scripts:ro" -v "$npm_config_cache:/npmcache" \
     -e STEAK_DSH_RELEASE_BASE="$DOCKER_BASE/good" -e npm_config_cache=/npmcache \
-    -e NODE_OPTIONS=--max-old-space-size=768 \
     "$PWSH_IMAGE" pwsh -NoProfile -Command '
       $ErrorActionPreference = "Stop"
       & /scripts/install.ps1
@@ -227,7 +235,7 @@ if [[ "$SKIP" != *,pwsh,* ]]; then
   say "pwsh: PSScriptAnalyzer (skipped when it does not install quickly)"
   TIMEOUT_CMD=$(command -v timeout || command -v gtimeout || true)
   # shellcheck disable=SC2016  # single quotes are deliberate: this is PowerShell, not shell
-  if ${TIMEOUT_CMD:+$TIMEOUT_CMD 300} docker run --rm --name steak-dsh-test-psanalyzer --platform linux/amd64 -v "$ROOT/scripts:/scripts:ro" "$PWSH_IMAGE" \
+  if ${TIMEOUT_CMD:+$TIMEOUT_CMD 300} docker run --rm --name steak-dsh-test-psanalyzer -v "$ROOT/scripts:/scripts:ro" "$PWSH_IMAGE" \
     pwsh -NoProfile -Command '
       Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
       $r = Invoke-ScriptAnalyzer -Path /scripts/install.ps1
