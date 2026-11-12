@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-11-12
 
 - `steak-dsh tui`: a full-screen terminal UI close to the Steak Pi one. One long-lived `dsh --profile sdk` child over
   JSON-RPC on stdio, the same overlay patches as `run` and `chat` (including `--long`). Header, transcript with
