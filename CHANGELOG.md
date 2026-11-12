@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The working rules (`plugins/rules.js`) gain one line asking the model to keep its reasoning short, pick the next step
+  and not narrate between tool calls. On the ParetoBench short set it cut output tokens and cost against 0.3.1.
+  No tool, plugin or safety row changed.
+
 ## 0.3.2 - 2026-11-12
 
 Fixes to `steak-dsh tui` on a real harness.

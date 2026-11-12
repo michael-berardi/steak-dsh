@@ -6,6 +6,7 @@ export const inject = ["systemPrompt"];
 
 export const DEFAULT_RULES = [
   "Work rules:",
+  "- Keep your reasoning short: pick the next step and take it. Do not restate the task, and do not narrate between tool calls.",
   "- Be economical with steps. Send independent tool calls together in one step (several reads, or several checks, at once) instead of one per step.",
   "- Gather context once. Do not re-read a file you just read or wrote, and do not list a directory twice.",
   "- For large files and logs, search or compute with a command instead of reading the whole file.",
