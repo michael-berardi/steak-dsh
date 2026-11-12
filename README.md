@@ -83,7 +83,8 @@ steak-dsh run "fix the failing test in src/parser"
 | Working rules | Six lines in the system prompt: batch independent tool calls, gather context once, compute on large files instead of reading them, check a change once, finish every part, keep the reply short. | on |
 | Verify after edit | After a file edit, runs your project's check command and hands a failure straight back to the model with the edit result. After two failures in a row it pauses until your next request. | on, does nothing until you set a command |
 | Owned paths | Refuses file edits outside the paths a task owns. Symlinks are resolved first. | per run, `--owned-path` |
-| Finish guard | Keeps the turn open when the todo list has open items or the reply reports unfinished work. | off |
+| Finish guard | Keeps the turn open when the todo list has open items or the reply reports unfinished work. Leaves subagent children alone. | off, on with `--long` |
+| Long-work profile | For multi-step or delegating work: gives back the subagent tool, its follow-up tool and the working-directory switch, turns the finish guard on, and states the spill budget so an oversized tool result stays readable by path. 18 tools instead of 13. Goal and workflow tools stay off. | off, `--long` |
 
 Every row can be switched from your own profile patch:
 
@@ -95,6 +96,37 @@ Every row can be switched from your own profile patch:
 - id: tool-subagent        # give the subagent tool back
   disabled: false
 ```
+
+### Long work
+
+The default is tuned for one-shot tasks, where a tool that is never called is only schema text on every request.
+Long, multi-step or delegating work is the opposite case, so it has its own switch:
+
+```sh
+steak-dsh run --long --verify "npm test" "migrate the store package to the new client, then update the callers"
+```
+
+`--long` adds five rows after the bundle and changes nothing when it is absent:
+
+```yaml
+- id: tool-subagent            # delegate a bounded part to a child
+  disabled: false
+- id: tool-subagent-control    # follow up on a running child
+  disabled: false
+- id: tool-working-directory
+  disabled: false
+- id: steak-finish-guard
+  disabled: false
+- id: spill-policy             # an oversized tool result keeps its head and tail inline and a path to the rest
+  config:
+    maxInlineTokens: 12500
+```
+
+Put the same rows in your profile patch to make them permanent. Measured on dsh 0.2.2-rc.1 against a local scripted
+endpoint (no model call): the first request carries 23 tools and 22,890 bytes on stock dsh, 13 tools and 12,532 bytes
+with the bundle, and 18 tools and 16,167 bytes with `--long`. That is the price of the profile per request. Whether
+it pays back on your long tasks is a separate measurement: see the gate in [GATE.md](GATE.md) and compare the two
+profiles on the same tasks before making it your default.
 
 ### Verify after edit
 
@@ -128,6 +160,7 @@ steak-dsh run --model acme/coder-large --base-url https://gateway.example/v1 --a
 
 steak-dsh chat --model deepseek-official/deepseek-flash      # line-based terminal chat
 steak-dsh run --stock "same task on stock dsh"                # A/B against the unmodified harness
+steak-dsh run --long "a multi-step task"                      # long-work profile: delegation tools and the finish guard on
 steak-dsh run --json --owned-path "$PWD/src" --no-shell "..." # scripted use: NDJSON events, edits fenced to src/
 ```
 

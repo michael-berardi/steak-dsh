@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const launcher = join(root, "bin", "steak-dsh");
 const bundlePatch = join(root, "cordis.patch.yml");
+const { LONG_PROFILE_ROWS, buildRows } = await import(join(root, "lib", "overlay.js"));
 
 const FAKE_DSH = `#!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
@@ -360,4 +361,63 @@ test("install: a dsh death by signal exits 128 + that signal, not always 143", (
     const result = run(["install"], s, { FAKE_DSH_SELF_SIGNAL: "SIGHUP" });
     assert.equal(result.status, 129, `SIGHUP(1) must map to 129 (stderr: ${result.stderr})`);
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("--long: the long-work profile rows are generated after the bundle; the default run is unchanged", () => {
+  const s = scratch();
+  try {
+    const long = run(["run", "--long", "--verify", "npm test", "a", "long", "task"], s);
+    assert.equal(long.status, 0, long.stderr);
+    const [rec] = records(s);
+    assert.equal(rec.patches[0].path, bundlePatch, "bundle patch first, so the profile rows override it");
+    const { rows } = generated(rec);
+    assert.deepEqual(rows, [
+      { id: "tool-subagent", disabled: false },
+      { id: "tool-subagent-control", disabled: false },
+      { id: "tool-working-directory", disabled: false },
+      { id: "steak-finish-guard", disabled: false },
+      { id: "spill-policy", config: { maxInlineTokens: 12500 } },
+      { id: "steak-verify-after-edit", config: { command: "npm test" } },
+    ]);
+    assert.deepEqual(rec.argv.slice(-4), ["--", "a", "long", "task"]);
+  } finally { rmSync(s.dir, { recursive: true, force: true }); }
+  const d = scratch();
+  try {
+    const plain = run(["run", "hello"], d);
+    assert.equal(plain.status, 0, plain.stderr);
+    const [rec] = records(d);
+    assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "workspace-write", "--approval-policy", "never", "--", "hello"],
+      "without --long no generated overlay is passed at all");
+  } finally { rmSync(d.dir, { recursive: true, force: true }); }
+});
+
+test("--long only switches rows the bundle ships switched the other way, and never goal or workflow tools", () => {
+  const bundle = readFileSync(bundlePatch, "utf8");
+  const disabledByBundle = new Set([...bundle.matchAll(/- id: (\S+)\n\s+(?:name: \S+\n\s+)?disabled: true/g)].map((m) => m[1]));
+  const enabled = LONG_PROFILE_ROWS.filter((row) => row.disabled === false).map((row) => row.id);
+  assert.deepEqual(enabled, ["tool-subagent", "tool-subagent-control", "tool-working-directory", "steak-finish-guard"]);
+  for (const id of enabled) assert.ok(disabledByBundle.has(id), `${id} is off in the bundle, so --long has something to turn on`);
+  for (const id of ["tool-goal", "goal-round-driver", "command-goal", "tool-workflow", "tool-subagent-fork", "session-title-llm"]) {
+    assert.ok(disabledByBundle.has(id), `${id} stays off in the bundle`);
+    assert.equal(LONG_PROFILE_ROWS.some((row) => row.id === id), false, `${id} is not part of the long-work profile`);
+  }
+  const rows = buildRows({ long: true, noShell: true, ownedPaths: [], patches: [] }, root);
+  assert.deepEqual(rows.slice(-3), [{ id: "tool-bash", disabled: true }, { id: "tool-pwsh", disabled: true }, { id: "tool-jobs", disabled: true }],
+    "--no-shell still applies on top of --long");
+  rows[0].disabled = true;
+  assert.equal(LONG_PROFILE_ROWS[0].disabled, false, "generated rows are copies; the profile constant cannot be edited by a caller");
+  assert.equal(/qwen|deepseek-v|openrouter|claude|gpt-|opus|sonnet|haiku|anthropic|openai/i.test(JSON.stringify(LONG_PROFILE_ROWS)), false, "the profile names no model or provider");
+});
+
+test("--long with --stock is refused by name; chat accepts --long", async () => {
+  const s = scratch();
+  try {
+    const bad = run(["run", "--stock", "--long", "x"], s);
+    assert.equal(bad.status, 2);
+    assert.match(bad.stderr, /--long cannot be combined with --stock/);
+    assert.equal(existsSync(s.record), false, "dsh is never started on a refused flag set");
+  } finally { rmSync(s.dir, { recursive: true, force: true }); }
+  const { parseOptions } = await import(join(root, "lib", "args.js"));
+  assert.equal(parseOptions(["--long"], { allowTask: false }).options.long, true, "chat takes the flag too");
+  assert.equal(parseOptions(["x"]).options.long, false, "off unless asked");
 });
