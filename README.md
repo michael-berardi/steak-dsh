@@ -402,6 +402,6 @@ Plugins run inside the `dsh` process. Owned paths gate the file-editing tools, n
 ## Development
 
 ```sh
-npm test                    # 137 tests, Node built-ins only
+npm test                    # 190 tests, Node built-ins only
 python3 benchmarks/selftest.py   # 20 tasks: check fails untouched, passes on the reference solution
 ```

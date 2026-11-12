@@ -204,3 +204,16 @@ test("environment flags: only explicit off values are off", () => {
   for (const off of [undefined, "", "0", "false", "No", " OFF "]) assert.equal(envFlagEnabled(off), false, String(off));
   for (const on of ["1", "true", "yes", "on"]) assert.equal(envFlagEnabled(on), true, on);
 });
+
+test("launcher: claude-code needs no endpoint or key, refuses an endpoint, and is left out by --stock", async () => {
+  const { parseOptions } = await import("../lib/args.js");
+  const { options } = parseOptions(["--model", "claude-code/some-row[1m]", "--effort", "high", "task"]);
+  assert.equal(options.provider, "claude-code");
+  assert.equal(options.model, "some-row[1m]");
+  assert.equal(options.baseUrl, undefined);
+  assert.equal(options.keyEnv, undefined);
+  assert.throws(() => parseOptions(["--stock", "--model", "claude-code/x", "task"]), /part of the bundle that --stock leaves out/);
+  assert.throws(() => parseOptions(["--model", "claude-code/x", "--base-url", "https://e.test", "--api", "openai-completions", "--key-env", "K", "task"]), /cannot name the claude-code route/);
+  assert.throws(() => parseOptions(["--stock", "--verify", "true", "task"]), /cannot be combined with --stock/);
+  assert.throws(() => parseOptions(["--stock", "--long", "task"]), /cannot be combined with --stock/);
+});
