@@ -1,0 +1,1488 @@
+import { createHash } from "node:crypto";
+import { constants as fsConstants, rmSync } from "node:fs";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
+import { createInterface } from "node:readline";
+import { spawn, } from "node:child_process";
+import { capCacheBreakpoints, MAX_CACHE_BREAKPOINTS } from "./cache-control.js";
+import { ClaudeWaitLimitError, transportTimeout, waitForOperation } from "./wait.js";
+import { TurnRelay } from "./turn-relay.js";
+import { usageCreditsAllowed, usageCreditsChargeError, } from "./billing.js";
+import { ClaudeCodeError, CODES } from "./errors.js";
+import { envFlagEnabled } from "./env.js";
+
+import { harnessToolName } from "./tool-names.js";
+
+export const INSTALL_HINT =
+  "Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` " +
+  "or set STEAK_DSH_CLAUDE_CODE_COMMAND to the executable.";
+export const LOGIN_HINT = "Claude Code is installed but not logged in. Run `claude auth login` and try again.";
+
+function configuredCommand(env) {
+  return env.STEAK_DSH_CLAUDE_CODE_COMMAND || "claude";
+}
+
+async function executable(path) {
+  try {
+    await access(path, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveClaudeExecutable(
+  env = process.env,
+) {
+  const command = configuredCommand(env);
+  if (isAbsolute(command) || command.includes("/") || command.includes("\\")) {
+    const candidate = resolve(command);
+    return (await executable(candidate)) ? candidate : undefined;
+  }
+
+  const extensions =
+    process.platform === "win32"
+      ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").flatMap((suffix) => [suffix, suffix.toLowerCase()])
+      : [""];
+  for (const directory of (env.PATH || "").split(delimiter)) {
+    if (!directory) continue;
+    for (const suffix of extensions) {
+      const candidate = join(directory, process.platform === "win32" && extname(command) ? command : command + suffix);
+      if (await executable(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+function withConfigDirectory(env) {
+  const output = {};
+  for (const [key, value] of Object.entries(env)) if (value !== undefined) output[key] = value;
+  if (output.STEAK_DSH_CLAUDE_CODE_CONFIG_DIR) output.CLAUDE_CONFIG_DIR = output.STEAK_DSH_CLAUDE_CODE_CONFIG_DIR;
+  return output;
+}
+
+async function captureProcess(
+  command,
+  args,
+  env,
+  signal,
+  timeoutMs = 20_000,
+) {
+  signal?.throwIfAborted();
+  const child = spawnCommand(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk) => (stdout = (stdout + chunk).slice(-1_000_000)));
+  child.stderr?.on("data", (chunk) => (stderr = (stderr + chunk).slice(-65_536)));
+
+  const abort = () => {
+    killProcessTree(child);
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+  };
+  try {
+    const code = await waitForOperation(childExit(child), transportTimeout(timeoutMs), "Claude Code auth status", signal, abort);
+    signal?.throwIfAborted();
+    return { code, stdout, stderr };
+  } finally {
+    abort();
+  }
+}
+
+/** One `claude auth status` per login at a time, and a settled answer reused briefly: every model and provider probe at
+ * startup used to spawn its own CLI (about 50 at once). A logged-out or uncertain
+ * answer is never cached, so a fresh sign-in is seen on the next check. */
+const STATUS_TTL_MS = 30_000;
+const statusInFlight = new Map();
+const statusCache = new Map();
+
+/** Test seam: forget every shared and cached status. */
+export function resetClaudeStatusCache() {
+  statusInFlight.clear();
+  statusCache.clear();
+}
+
+export async function getClaudeStatus(
+  envInput = process.env,
+  signal,
+) {
+  signal?.throwIfAborted();
+  const env = withConfigDirectory(envInput);
+  const key = JSON.stringify([configuredCommand(env), env.PATH, env.HOME, env.CLAUDE_CONFIG_DIR]);
+  const cached = statusCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.status;
+  let shared = statusInFlight.get(key);
+  if (!shared) {
+    // One probe per login. It is stopped only when every caller waiting on it has aborted: one caller leaving never fails
+    // the others, and a probe nobody waits for is never left running.
+    const abort = new AbortController();
+    const entry = { promise: undefined, waiters: 0, abort };
+    entry.promise = readClaudeStatus(env, abort.signal).then((status) => {
+      if (status.available && status.loggedIn) statusCache.set(key, { status, expires: Date.now() + STATUS_TTL_MS });
+      return status;
+    }).finally(() => { if (statusInFlight.get(key) === entry) statusInFlight.delete(key); });
+    statusInFlight.set(key, entry);
+    shared = entry;
+  }
+  const entry = shared;
+  entry.waiters++;
+  let left = false;
+  const leave = () => {
+    if (left) return;
+    left = true;
+    if (--entry.waiters === 0 && statusInFlight.get(key) === entry) {
+      statusInFlight.delete(key);
+      entry.abort.abort(signal?.reason);
+    }
+  };
+  if (!signal) {
+    try { return await entry.promise; } finally { if (!left) { left = true; entry.waiters--; } }
+  }
+  return await new Promise((resolve, reject) => {
+    const onAbort = () => { leave(); reject(signal.reason ?? new Error("aborted")); };
+    signal.addEventListener("abort", onAbort, { once: true });
+    entry.promise.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+      if (!left) { left = true; entry.waiters--; }
+    });
+  });
+}
+
+async function readClaudeStatus(env, signal) {
+  const command = await resolveClaudeExecutable(env);
+  if (!command) return { available: false, loggedIn: false, subscription: false, detail: INSTALL_HINT };
+  // Only Claude Code's own answer `loggedIn: false` means logged out. A check that timed out, crashed or printed
+  // no status (a busy machine, a token refresh racing another process) is retried once and then named as what it
+  // is: 2026-10-29 two Haiku workers were torn down as "not logged in" while the login was fine.
+  let uncertain = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    try {
+      const result = await captureProcess(command, ["auth", "status"], env, signal);
+      const text = result.stdout.trim();
+      let payload;
+      if (text.startsWith("{")) { try { payload = JSON.parse(text); } catch { payload = undefined; } }
+      if (!payload || typeof payload.loggedIn !== "boolean") {
+        uncertain = `Claude Code auth status gave no answer (exit ${result.code}${result.stderr.trim() ? `: ${result.stderr.trim().slice(0, 200)}` : ""})`;
+        continue;
+      }
+      const loggedIn = payload.loggedIn === true;
+      const plan = typeof payload.subscriptionType === "string" ? payload.subscriptionType : undefined;
+      return {
+        available: true,
+        loggedIn,
+        subscription: loggedIn && !!plan,
+        command,
+        authMethod: typeof payload.authMethod === "string" ? payload.authMethod : undefined,
+        plan,
+        detail: loggedIn ? undefined : LOGIN_HINT,
+      };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      uncertain = `Claude Code auth status failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  return { available: true, loggedIn: false, subscription: false, command, detail: `${uncertain}; the login itself was not checked` };
+}
+
+const READY_STATUS_TTL_MS = 60_000;
+const readyStatusCache = new Map();
+
+/**
+ * Resolve a logged-in Claude Code executable. Successful checks are cached
+ * briefly because a fresh worker is spawned after every tool call, and an
+ * extra `claude auth status` process on each of those turns adds latency.
+ */
+async function readyClaudeCommand(
+  envInput,
+  signal,
+) {
+  const env = withConfigDirectory(envInput);
+  const key = JSON.stringify([configuredCommand(env), env.PATH, env.HOME, env.CLAUDE_CONFIG_DIR]);
+  const cached = readyStatusCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.command;
+
+  const status = await getClaudeStatus(env, signal);
+  if (!status.available || !status.command) throw new ClaudeCodeError(INSTALL_HINT, CODES.NOT_READY);
+  if (!status.loggedIn) {
+    readyStatusCache.delete(key);
+    throw new ClaudeCodeError(status.detail ?? LOGIN_HINT, CODES.NOT_READY);
+  }
+  readyStatusCache.set(key, { command: status.command, expires: Date.now() + READY_STATUS_TTL_MS });
+  return status.command;
+}
+
+function isDiscoveredModel(value) {
+  if (!value || typeof value !== "object") return false;
+  const model = value;
+  return (
+    typeof model.value === "string" &&
+    typeof model.displayName === "string" &&
+    typeof model.description === "string" &&
+    (model.resolvedModel === undefined || typeof model.resolvedModel === "string")
+  );
+}
+
+/** Ask the installed Claude Code process for the account's selectable model catalog. */
+export async function discoverClaudeModels(
+  envInput = process.env,
+  signal,
+  timeoutMs = 20_000,
+) {
+  signal?.throwIfAborted();
+  const env = processEnvironment(envInput, {});
+  const command = await resolveClaudeExecutable(env);
+  if (!command) throw new ClaudeCodeError(INSTALL_HINT, CODES.NOT_READY);
+
+  const args = [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--model",
+    "default",
+    "--tools",
+    "",
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--permission-mode",
+    "dontAsk",
+    "--permission-prompts",
+    "none",
+    "--no-session-persistence",
+    "--mcp-config",
+    JSON.stringify({ mcpServers: {} }),
+  ];
+  const child = spawnCommand(command, args, {
+    cwd: process.cwd(),
+    env,
+    detached: process.platform !== "win32",
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk) => (stderr = (stderr + chunk).slice(-65_536)));
+
+  const exit = childExit(child);
+  // Attach immediately: discovery may spend its entire lifetime waiting for stdout.
+  void exit.catch(() => {});
+  const reader = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const stop = () => {
+    killProcessTree(child);
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    reader.close();
+  };
+  child.stdin?.on("error", () => stop());
+
+  const requestId = `dsh-models-${Date.now()}`;
+  child.stdin?.write(
+    `${JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "initialize" } })}\n`,
+  );
+  child.stdin?.end(
+    `${JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "model-catalog-probe" }] },
+      shouldQuery: false,
+    })}\n`,
+  );
+
+  let models;
+  const discover = async () => {
+    for await (const line of reader) {
+      if (!line.trim()) continue;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (event.type !== "control_response") continue;
+      const envelope = event.response;
+      if (envelope?.request_id !== requestId || envelope.subtype !== "success") continue;
+      const response = envelope.response;
+      if (Array.isArray(response?.models)) {
+        models = response.models.filter(isDiscoveredModel);
+        // Only the models and the leader's exit are required. An MCP grandchild
+        // may hold stdout indefinitely after Claude has exited.
+        break;
+      }
+    }
+    const exitCode = await exit;
+    signal?.throwIfAborted();
+    if (exitCode !== 0) throw new Error(`Claude Code model discovery failed${stderr ? `: ${stderr.trim().slice(-500)}` : ""}`);
+    if (!models?.length) throw new Error("Claude Code returned no selectable models");
+    return models;
+  };
+  try {
+    return await waitForOperation(discover(), transportTimeout(timeoutMs), "Claude Code model discovery", signal, stop);
+  } finally {
+    stop();
+  }
+}
+
+// Detached POSIX launches create a group whose id is the spawned leader's PID.
+// Keep the proof on the ChildProcess object, not in a PID-keyed cache that can
+// accidentally transfer ownership to a later process with the same number.
+const ownedProcessGroups = new WeakMap();
+const EXITED_GROUP_GRACE_MS = 1_000;
+
+function spawnCommand(
+  command,
+  args,
+  options,
+) {
+  if (process.platform === "win32" && /\.(?:cmd|bat)$/iu.test(command)) {
+    const comspec = options?.env?.COMSPEC || process.env.COMSPEC || "cmd.exe";
+    const quote = (value) => `"${value.replace(/"/gu, '""')}"`;
+    return spawn(comspec, ["/d", "/s", "/c", [quote(command), ...args.map(quote)].join(" ")], options);
+  }
+  const child = spawn(command, args, options);
+  if (process.platform !== "win32" && options?.detached && child.pid !== undefined) {
+    const group = { pid: child.pid, exitedAt: undefined };
+    ownedProcessGroups.set(child, group);
+    child.once("exit", () => { group.exitedAt = performance.now(); });
+  }
+  return child;
+}
+
+function childExit(child) {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode);
+  if (child.signalCode !== null) return Promise.reject(new Error(`Claude Code exited from signal ${child.signalCode}`));
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code !== null) resolve(code);
+      else reject(new Error(`Claude Code exited from signal ${signal ?? "unknown"}`));
+    });
+  });
+}
+
+export function killProcessTree(child) {
+  if (child.pid === undefined) return;
+  const exited = child.exitCode !== null || child.signalCode !== null;
+  if (process.platform === "win32") {
+    // taskkill resolves a numeric PID at execution time. Once our child has
+    // exited, that PID may already name an unrelated process and its tree.
+    if (exited) return;
+    const killer = spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    killer.unref();
+    return;
+  }
+  const group = ownedProcessGroups.get(child);
+  if (group?.pid === child.pid) {
+    // A freshly exited leader may leave MCP children holding its pipes. Only
+    // use the group we created, and only while its ownership proof is fresh.
+    // After the grace window we have no independently tracked live member to
+    // verify ownership: kill(-pgid, 0) proves existence, not that it is ours.
+    // Fail closed instead of signalling a potentially reused group id.
+    if (exited && (group.exitedAt === undefined || performance.now() - group.exitedAt >= EXITED_GROUP_GRACE_MS)) return;
+    try {
+      process.kill(-group.pid, "SIGKILL");
+      return;
+    } catch {
+      // Fall back only to a still-live child; never reuse an exited leader PID.
+    }
+  }
+  if (exited) return;
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // It exited between the checks.
+  }
+}
+
+class AsyncQueue {
+  values = [];
+  waiters = [];
+  ended = false;
+  failure;
+  activity = new Set();
+
+  touch() {
+    for (const reset of this.activity) reset();
+  }
+
+  push(value) {
+    if (this.ended) return;
+    const waiter = this.waiters.shift();
+    if (waiter) waiter({ value, done: false });
+    else this.values.push(value);
+  }
+
+  end(error) {
+    if (this.ended) return;
+    this.ended = true;
+    this.failure = error;
+    for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true });
+  }
+
+  async next(signal, timeoutMs) {
+    signal?.throwIfAborted();
+    if (this.values.length) return this.values.shift();
+    if (this.ended) {
+      if (this.failure) throw this.failure;
+      return undefined;
+    }
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (fn) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.activity.delete(reset);
+        signal?.removeEventListener("abort", onAbort);
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) this.waiters.splice(index, 1);
+        fn();
+      };
+      const waiter = (item) =>
+        finish(() => {
+          if (item.done && this.failure) reject(this.failure);
+          else resolve(item.done ? undefined : item.value);
+        });
+      const onAbort = () => finish(() => reject(signal?.reason ?? new Error("Claude Code request aborted")));
+      let timer;
+      const reset = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => finish(() => reject(new ClaudeWaitLimitError("Claude Code stream idle limit exceeded (no bytes or events)"))), timeoutMs);
+      };
+      this.activity.add(reset);
+      reset();
+      this.waiters.push(waiter);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+}
+
+function conflictingEnvironment(env) {
+  const conflicts = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_FOUNDRY_API_KEY"].filter(
+    (key) => !!env[key],
+  );
+  for (const key of ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"]) {
+    if (envFlagEnabled(env[key])) conflicts.push(key);
+  }
+  return conflicts;
+}
+
+export function processEnvironment(
+  input,
+  extraBody,
+) {
+  const env = withConfigDirectory({ ...process.env, ...input });
+  const conflicts = conflictingEnvironment(env);
+  if (conflicts.length) {
+    throw new ClaudeCodeError(`Claude Code route refuses conflicting auth/backend overrides: ${conflicts.join(", ")}. Unset them for this run: the route bills to your Claude Code subscription login only.`, CODES.CONFLICTING_ENV);
+  }
+  delete env.CLAUDE_CODE_EXTRA_BODY;
+  Object.assign(env, {
+    ENABLE_TOOL_SEARCH: "false",
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    CLAUDE_CODE_MAX_RETRIES: "0",
+    DISABLE_AUTO_COMPACT: "1",
+    DISABLE_COMPACT: "1",
+    CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
+    DISABLE_TELEMETRY: "1",
+    DISABLE_ERROR_REPORTING: "1",
+  });
+  if (typeof extraBody.max_tokens === "number") env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(extraBody.max_tokens);
+  return env;
+}
+
+async function writeFrame(child, frame, timeoutMs, signal) {
+  signal?.throwIfAborted();
+  const stdin = child.stdin;
+  if (!stdin?.writable) throw new Error("Claude Code stdin closed during history replay");
+  if (stdin.write(`${JSON.stringify(frame)}\n`)) return;
+  // A long history fills the pipe. Escape, or Claude Code going away, must end the wait: a pipe that
+  // is closed without an error never drains, and the turn would sit at "thinking" for good.
+  await new Promise((resolve, reject) => {
+    const finish = (fn) => {
+      clearTimeout(timer);
+      stdin.off("drain", onDrain);
+      stdin.off("error", onError);
+      stdin.off("close", onClose);
+      signal?.removeEventListener("abort", onAbort);
+      fn();
+    };
+    const onDrain = () => finish(resolve);
+    const onError = (error) => finish(() => reject(error));
+    const onClose = () => finish(() => reject(signal?.reason ?? new Error("Claude Code stdin closed during history replay")));
+    const onAbort = () => finish(() => reject(signal?.reason ?? new Error("Claude Code request aborted")));
+    const timer = setTimeout(() => finish(() => reject(new ClaudeWaitLimitError("Claude Code history replay write exceeded its wait limit"))), timeoutMs);
+    stdin.once("drain", onDrain);
+    stdin.once("error", onError);
+    stdin.once("close", onClose);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    else if (stdin.destroyed || !stdin.writable) onClose();
+  });
+}
+
+function nativeErrorText(event) {
+  const messageError = (event.message).error;
+  if (!event.error && !messageError) return undefined;
+  const text = event.message.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  const detail = (value) => {
+    if (typeof value === "string") return value;
+    if (value && typeof value === "object") {
+      const error = value;
+      return [error.type, error.message].filter((part) => typeof part === "string").join(": ");
+    }
+    return "";
+  };
+  return stripVTControlCharacters(text || detail(event.error) || detail(messageError))
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .replace(/(?:sk-ant-[a-zA-Z0-9_-]+|Bearer\s+[^\s]+)/giu, "[redacted]")
+    .slice(0, 500);
+}
+
+function withoutCacheControl(value) {
+  if (Array.isArray(value)) return value.map(withoutCacheControl);
+  if (!value || typeof value !== "object") return value;
+  const output = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key !== "cache_control") output[key] = withoutCacheControl(child);
+  }
+  return output;
+}
+
+function requestMessages(body) {
+  if (!body) return undefined;
+  try {
+    const payload = JSON.parse(body.toString("utf8"));
+    return Array.isArray(payload.messages) ? (payload.messages) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function deriveInitialUserPrefix(body, canonicalContent) {
+  if (canonicalContent.length === 0) return undefined;
+  const actual = requestMessages(body)?.[0];
+  if (actual?.role !== "user" || !Array.isArray(actual.content) || actual.content.length < canonicalContent.length) {
+    return undefined;
+  }
+  const suffix = actual.content.slice(-canonicalContent.length).map(withoutCacheControl);
+  if (JSON.stringify(suffix) !== JSON.stringify(canonicalContent.map(withoutCacheControl))) return undefined;
+  return structuredClone(actual.content.slice(0, -canonicalContent.length));
+}
+
+function deriveInitialSystemMessages(body) {
+  const messages = requestMessages(body);
+  if (messages?.[0]?.role !== "user") return undefined;
+  let end = 1;
+  while (messages[end]?.role === "system") end += 1;
+  const systems = messages.slice(1, end);
+
+  // A replayed history from an older carrier has the date reminder at the
+  // moving tail rather than in the initial environment reminder. Snapshot it
+  // beside the environment so the next request has a stable prefix.
+  let trailingStart = messages.length;
+  while (trailingStart > end && messages[trailingStart - 1]?.role === "system") trailingStart -= 1;
+  if (trailingStart < messages.length) systems.push(...messages.slice(trailingStart));
+  return systems.length ? structuredClone(systems) : undefined;
+}
+
+function contentText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) =>
+      block && typeof block === "object" && typeof (block).text === "string"
+        ? ((block).text)
+        : "",
+    )
+    .join("");
+}
+
+function setCacheBreakpoint(message) {
+  if (typeof message.content === "string") {
+    message.content = [
+      { type: "text", text: message.content, cache_control: { type: "ephemeral", ttl: "1h" } },
+    ];
+    return;
+  }
+  if (!Array.isArray(message.content) || message.content.length === 0) return;
+  const last = message.content.at(-1);
+  if (!last || typeof last !== "object") return;
+  (last).cache_control = { type: "ephemeral", ttl: "1h" };
+}
+
+function setReplayCacheBreakpoints(messages) {
+  const userIndexes = messages
+    .map((message, index) => (message.role === "user" ? index : -1))
+    .filter((index) => index >= 0);
+  if (userIndexes.length >= 3) {
+    // Claude permits four cache breakpoints. Its two system-prompt markers
+    // consume half of them, so once a prior queried user exists, move the
+    // native environment marker to that exact previous query boundary. This
+    // avoids relying on automatic lookback (notably unreliable with images).
+    for (const message of messages) {
+      if (message.role === "system") message.content = withoutCacheControl(message.content);
+    }
+    setCacheBreakpoint(messages[userIndexes.at(-2) ]);
+  }
+  const final = messages.at(-1);
+  if (final) setCacheBreakpoint(final);
+}
+
+/// The text blocks of the Claude Code context (memory index, account email, ...) that Claude Code
+/// attaches once, to the first user message.
+function contextTexts(prefix) {
+  const texts = [];
+  for (const block of prefix ?? []) {
+    const text = contentText([block]).trim();
+    if (text) texts.push(text);
+  }
+  return texts;
+}
+
+/// Every way Claude Code spells the context when it re-attaches it to a tool result: the blocks
+/// joined by nothing, a newline or a blank line, and itself separated from the output by a blank
+/// line (current CLI) or a newline (older CLI).
+function contextTails(texts) {
+  const tails = [];
+  for (const lead of ["\n\n", "\n"]) {
+    for (const join of ["\n\n", "\n", ""]) tails.push(lead + texts.join(join));
+  }
+  return tails;
+}
+
+/// Remove the re-attached context from the end of a tool-result string. Only an exact copy of the
+/// whole context is removed; a tool's own output that merely mentions a reminder is left alone.
+function stripContextTail(text, texts) {
+  const trimmed = text.trimEnd();
+  for (const tail of contextTails(texts)) {
+    if (trimmed.endsWith(tail)) return trimmed.slice(0, -tail.length);
+  }
+  return undefined;
+}
+
+function stripToolResultContext(toolResult, texts) {
+  if (typeof toolResult.content === "string") {
+    const stripped = stripContextTail(toolResult.content, texts);
+    if (stripped !== undefined) toolResult.content = stripped;
+    return;
+  }
+  if (!Array.isArray(toolResult.content)) return;
+  const blocks = toolResult.content;
+
+  // The context as its own trailing text blocks, one per context block.
+  const tail = blocks.slice(-texts.length);
+  if (
+    tail.length === texts.length &&
+    tail.every(
+      (block, index) => block?.type === "text" && typeof block.text === "string" && block.text.trim() === texts[index],
+    )
+  ) {
+    blocks.splice(-texts.length, texts.length);
+    return;
+  }
+
+  // The context as the end of the final text block.
+  const final = blocks.at(-1);
+  if (final?.type !== "text" || typeof final.text !== "string") return;
+  if (final.text.trim() === texts.join("\n") || final.text.trim() === texts.join("")) {
+    blocks.pop();
+    return;
+  }
+  const stripped = stripContextTail(final.text, texts);
+  if (stripped !== undefined) final.text = stripped;
+}
+
+/// Claude Code attaches its context to the first user message only. When it replays a history it
+/// re-attaches that context to the newest user message, which after a tool call is a tool result.
+/// Remove it again so the context appears once and every tool result reaches the model unchanged.
+function removeRepeatedUserReminders(messages, prefix) {
+  const texts = contextTexts(prefix);
+  if (!prefix || texts.length === 0) return;
+  const normalizedPrefix = JSON.stringify(prefix.map(withoutCacheControl));
+
+  for (let index = 1; index < messages.length; index++) {
+    const message = messages[index];
+    if (message?.role !== "user" || !Array.isArray(message.content)) continue;
+    const leading = message.content.slice(0, prefix.length).map(withoutCacheControl);
+    if (JSON.stringify(leading) === normalizedPrefix) message.content.splice(0, prefix.length);
+
+    for (const block of message.content) {
+      if (block && typeof block === "object" && (block).type === "tool_result") {
+        stripToolResultContext(block, texts);
+      }
+    }
+  }
+}
+
+function injectNativeSystemMessages(
+  messages,
+  injections,
+) {
+  const byAssistant = new Map();
+  const trailing = [];
+  for (const injection of injections) {
+    const message = { role: "system", content: structuredClone(injection.content) };
+    if (injection.beforeAssistant === null) trailing.push(message);
+    else {
+      const pending = byAssistant.get(injection.beforeAssistant) ?? [];
+      pending.push(message);
+      byAssistant.set(injection.beforeAssistant, pending);
+    }
+  }
+
+  const output = [];
+  let assistantOrdinal = 0;
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      output.push(...(byAssistant.get(assistantOrdinal) ?? []));
+      byAssistant.delete(assistantOrdinal);
+      assistantOrdinal += 1;
+    }
+    output.push(message);
+  }
+  if (byAssistant.size > 0) throw new Error("Claude Code request lost an assistant boundary needed by system history");
+  output.push(...trailing);
+  return output;
+}
+
+function normalizeLeadingSystemCache(system) {
+  if (!Array.isArray(system)) return;
+  for (const block of system) {
+    if (block && typeof block === "object") delete (block).cache_control;
+  }
+  const last = system.at(-1);
+  if (last && typeof last === "object") {
+    (last).cache_control = { type: "ephemeral", ttl: "1h" };
+  }
+}
+
+export function rewriteInitialRequest(
+  body,
+  prefix,
+  canonicalContent,
+  initialSystemMessages,
+  nativeSystemInjections,
+) {
+  const payload = JSON.parse(body.toString("utf8"))
+
+   ;
+  let messages = payload.messages;
+  const first = messages?.[0];
+  if (first?.role !== "user" || !Array.isArray(first.content)) {
+    throw new Error("Claude Code request is missing its initial user message");
+  }
+  if (prefix) first.content = [...structuredClone(prefix), ...structuredClone(canonicalContent)];
+
+  if (initialSystemMessages?.length && messages) {
+    let systemEnd = 1;
+    while (messages[systemEnd]?.role === "system") systemEnd += 1;
+    messages.splice(1, systemEnd - 1, ...(structuredClone(initialSystemMessages)));
+
+    const initialText = initialSystemMessages
+      .map((message) => contentText((message).content))
+      .join("\n");
+    while (messages.at(-1)?.role === "system") {
+      const trailingText = contentText(messages.at(-1)?.content);
+      if (!trailingText || !initialText.includes(trailingText)) break;
+      messages.pop();
+    }
+  }
+  // Independent of the saved system messages: a replay without them still gets the context
+  // re-attached to its newest tool result.
+  if (messages) removeRepeatedUserReminders(messages, prefix);
+
+  if (nativeSystemInjections) {
+    messages = injectNativeSystemMessages(messages, nativeSystemInjections);
+    payload.messages = messages;
+    normalizeLeadingSystemCache(payload.system);
+  }
+  if (initialSystemMessages?.length || nativeSystemInjections) setReplayCacheBreakpoints(messages);
+
+  // The CLI's own markers plus the relay's marker can exceed Anthropic's limit
+  // of four. The oldest message marker goes first, so the system prompt, the
+  // tool definitions and the newest message keep their cache.
+  reportCacheCap(capCacheBreakpoints(payload).dropped);
+
+  return Buffer.from(JSON.stringify(payload));
+}
+
+/// Keep every forwarded request inside Anthropic's four-breakpoint limit.
+///
+/// The relay forwards more than the first request of a turn, and a request that
+/// the agent did not shape (no saved system messages, no native injections)
+/// would otherwise reach the API with the CLI's markers untouched. The body is
+/// only re-serialized when a marker was actually dropped.
+/// The cap is reported once per process: the dropped-marker count is a fact
+/// about the request shape, not something the operator needs on every turn.
+let cacheCapReported = false;
+let diagnosticReporter;
+
+/** The extension supplies a TUI-safe notification sink; headless callers stay quiet. */
+export function setClaudeCodeDiagnosticReporter(reporter) {
+  diagnosticReporter = reporter;
+}
+
+/// Report that markers were dropped, once per process and with a count only.
+function reportCacheCap(dropped) {
+  if (dropped <= 0 || cacheCapReported || !diagnosticReporter) return;
+  cacheCapReported = true;
+  diagnosticReporter(
+    `[claude-code] ${dropped} cache marker(s) dropped to stay inside Anthropic's limit of ${MAX_CACHE_BREAKPOINTS}`,
+  );
+}
+
+export function capRequestCacheBreakpoints(body) {
+  let payload;
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch {
+    return body;
+  }
+  if (!payload || typeof payload !== "object") return body;
+  const { dropped } = capCacheBreakpoints(payload);
+  if (dropped === 0) return body;
+  reportCacheCap(dropped);
+  return Buffer.from(JSON.stringify(payload));
+}
+
+/// The request transform the relay uses for every request of a turn.
+///
+/// A request the agent shaped is rewritten first (the saved native environment
+/// and the relay's own markers are placed there), and every request, shaped or
+/// not, is then kept inside Anthropic's four-breakpoint limit.
+export function buildRequestTransform(input
+
+ ) {
+  return (body) => {
+    // A history saved before the context was recorded has no prefix: read it from this request.
+    const prefix = input.initialUserPrefix ?? deriveInitialUserPrefix(body, input.canonicalInitialUser);
+    const shaped =
+      prefix || input.initialSystemMessages || input.nativeSystemInjections
+        ? rewriteInitialRequest(
+            body,
+            prefix,
+            input.canonicalInitialUser,
+            input.initialSystemMessages,
+            input.nativeSystemInjections,
+          )
+        : body;
+    return capRequestCacheBreakpoints(shaped);
+  };
+}
+
+const CLAUDE_PROCESS_MAX_AGE_MS = 5 * 60 * 1_000;
+const MAX_CACHED_CLAUDE_PROCESSES = 2;
+
+function canonicalJson(value) {
+  if (value === undefined) return "null";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.entries(value)
+    .filter(([, child]) => child !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+    .join(",")}}`;
+}
+
+function digest(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+function frameHistoryHash(frames) {
+  return digest(
+    frames.map((frame) => ({
+      type: frame.type,
+      message: frame.message,
+    })),
+  );
+}
+
+function launchPlan(input) {
+  const timeoutMs = transportTimeout(input.timeoutMs);
+  const env = processEnvironment(input.env, input.extraBody);
+  return {
+    env,
+    timeoutMs,
+    fingerprint: digest({
+      command: configuredCommand(env),
+      cwd: resolve(input.cwd ?? process.cwd()),
+      env,
+      extraBody: input.extraBody,
+      manifest: input.manifest,
+      model: input.model,
+      systemPrompt: input.systemPrompt,
+      timeoutMs,
+      upstreamUrl: input.upstreamUrl ?? "https://api.anthropic.com",
+    }),
+  };
+}
+
+class ClaudeProcess {
+  busy = false;
+  createdAt = Date.now();
+  lastUsed = this.createdAt;
+
+  tipHash;
+  expiryTimer;
+  closed = false;
+  stderr = "";
+
+  constructor(
+    fingerprint,
+    root,
+    child,
+    relay,
+    queue,
+    readTask,
+    exitOutcome,
+    timeoutMs,
+  ) {
+    this.fingerprint = fingerprint;
+    this.root = root;
+    this.child = child;
+    this.relay = relay;
+    this.queue = queue;
+    this.readTask = readTask;
+    this.exitOutcome = exitOutcome;
+    this.timeoutMs = timeoutMs;
+
+    child.stdin?.on("error", (error) => queue.end(new Error("Claude Code stdin failed", { cause: error })));
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk) => (this.stderr = (this.stderr + chunk).slice(-65_536)));
+  }
+
+  static async create(input, plan) {
+    input.signal?.throwIfAborted();
+    const command = await readyClaudeCommand({ ...process.env, ...input.env }, input.signal);
+
+    const root = await mkdtemp(join(tmpdir(), "steak-dsh-claude-code-"));
+    const toolsPath = join(root, "tools.json");
+    const settingsPath = join(root, "settings.json");
+    const systemPath = join(root, "system.md");
+    const inertMcpPath = fileURLToPath(new URL("./inert-mcp.mjs", import.meta.url));
+    let child;
+    let relay;
+
+    try {
+      await Promise.all([
+        writeFile(toolsPath, JSON.stringify(input.manifest), "utf8"),
+        writeFile(settingsPath, JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(input.extraBody) } }), "utf8"),
+        writeFile(systemPath, input.systemPrompt, "utf8"),
+      ]);
+
+      relay = new TurnRelay(input.upstreamUrl ?? "https://api.anthropic.com", plan.timeoutMs);
+      const env = { ...plan.env, ANTHROPIC_BASE_URL: await relay.start(input.signal) };
+      const mcp = {
+        mcpServers: {
+          dsh: { command: process.execPath, args: [inertMcpPath, toolsPath] },
+        },
+      };
+      const args = [
+        "-p",
+        "--model",
+        input.model,
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--tools",
+        "",
+        "--system-prompt-file",
+        systemPath,
+        "--settings",
+        settingsPath,
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--max-turns",
+        "1",
+        "--permission-mode",
+        "dontAsk",
+        "--no-session-persistence",
+        "--mcp-config",
+        JSON.stringify(mcp),
+      ];
+
+      input.signal?.throwIfAborted();
+      child = spawnCommand(command, args, {
+        // Claude Code tells the model its process cwd. Keep transport files
+        // private while exposing the harness's real working directory to the model.
+        cwd: input.cwd ?? process.cwd(),
+        env,
+        detached: process.platform !== "win32",
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const queue = new AsyncQueue();
+      child.stdout?.on("data", () => queue.touch());
+      const reader = createInterface({ input: child.stdout, crlfDelay: Infinity });
+      const readTask = (async () => {
+        try {
+          for await (const line of reader) {
+            if (!line.trim()) continue;
+            try {
+              queue.push(JSON.parse(line));
+            } catch (error) {
+              throw new Error(`Invalid Claude Code stream-json output: ${line.slice(0, 300)}`, { cause: error });
+            }
+          }
+          queue.end();
+        } catch (error) {
+          queue.end(error instanceof Error ? error : new Error(String(error)));
+        }
+      })();
+      const exitOutcome = childExit(child).then(
+        (code) => ({ code }),
+        (error) => ({ error: error instanceof Error ? error : new Error(String(error)) }),
+      );
+      const worker = new ClaudeProcess(plan.fingerprint, root, child, relay, queue, readTask, exitOutcome, plan.timeoutMs);
+      liveWorkers.add(worker);
+      installExitHook();
+      return worker;
+    } catch (error) {
+      relay?.abort();
+      if (child) killProcessTree(child);
+      await relay?.close();
+      await rm(root, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  isAlive() {
+    return !this.closed && this.child.exitCode === null && !!this.child.stdin?.writable;
+  }
+
+  isExpired(now = Date.now()) {
+    return now - this.createdAt >= CLAUDE_PROCESS_MAX_AGE_MS;
+  }
+
+  canContinue(input) {
+    if (!this.tipHash || input.frames.length === 0) return false;
+    return frameHistoryHash(input.frames.slice(0, -1)) === this.tipHash;
+  }
+
+  clearExpiryTimer() {
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = undefined;
+  }
+
+  /** Mark the worker idle and schedule its close for the end of its lifetime. */
+  armExpiryTimer(expire) {
+    this.clearExpiryTimer();
+    this.lastUsed = Date.now();
+    const remainingLifetime = CLAUDE_PROCESS_MAX_AGE_MS - (this.lastUsed - this.createdAt);
+    this.expiryTimer = setTimeout(expire, Math.max(0, remainingLifetime));
+    this.expiryTimer.unref?.();
+  }
+
+  commit(input, message) {
+    // Claude Code executes MCP calls internally before emitting its max-turns
+    // result. Our inert MCP response is therefore part of its hidden history,
+    // while the harness will append the real tool result. That state is not a faithful
+    // continuation and must be discarded; the next request replays from the harness.
+    if (message.content.some((block) => block.type === "tool_use")) {
+      this.tipHash = undefined;
+      return false;
+    }
+    this.tipHash = frameHistoryHash([
+      ...input.frames,
+      { type: "assistant", message: { role: "assistant", content: message.content } },
+    ]);
+    return true;
+  }
+
+  async run(input, continuation) {
+    if (!this.isAlive()) throw new Error("Claude Code process is no longer available");
+    input.signal?.throwIfAborted();
+
+
+    let sawMessageStop = false;
+    const deliver = (event) => {
+      if (event.type === "message_stop") sawMessageStop = true;
+      input.onEvent?.(event);
+    };
+    const canonicalInitialUser = input.frames.find((frame) => frame.type === "user")?.message.content ?? [];
+    this.relay.beginTurn(
+      deliver,
+      buildRequestTransform({
+        initialUserPrefix: input.initialUserPrefix,
+        initialSystemMessages: input.initialSystemMessages,
+        nativeSystemInjections: input.nativeSystemInjections,
+        canonicalInitialUser,
+      }),
+      input.betas,
+      () => this.queue.touch(),
+    );
+
+    const abort = () => {
+      this.relay.abort();
+      this.closeNow();
+    };
+    input.signal?.addEventListener("abort", abort, { once: true });
+    const assistants = [];
+    let result;
+    let nativeError;
+    let rateLimit;
+
+    try {
+      // The replay is bounded per frame, not as a whole: a long conversation on a busy machine
+      // needs more than one budget to load, while a frame that is never acknowledged (even under
+      // native chatter) still ends the wait. Each acknowledged frame is progress.
+      const frames = continuation ? input.frames.slice(-1) : input.frames;
+      for (const [index, frame] of frames.entries()) {
+        await waitForOperation((async () => {
+          await writeFrame(this.child, frame, this.timeoutMs, input.signal);
+          if (frame.shouldQuery === false) {
+            for (;;) {
+              const event = await this.queue.next(input.signal, this.timeoutMs);
+              if (!event) throw await this.exitError("Claude Code exited before acknowledging history replay", input.signal);
+              if (event.type === "result") {
+                if (event.num_turns !== 0 || event.is_error) {
+                  throw new Error("Claude Code rejected zero-turn history replay");
+                }
+                break;
+              }
+            }
+          }
+        })(), this.timeoutMs, `Claude Code history replay (frame ${index + 1} of ${frames.length})`, input.signal, abort);
+      }
+
+      for (;;) {
+        const event = await this.queue.next(input.signal, this.timeoutMs);
+        if (!event) throw await this.exitError("Claude Code exited before completing its response", input.signal);
+        if (event.type === "assistant") {
+          const error = nativeErrorText(event);
+          if (error !== undefined) nativeError = error;
+          else assistants.push(event.message);
+        } else if (event.type === "result") {
+          result = event;
+          break;
+        } else if (event.type === "rate_limit_event") {
+          if (event.rate_limit_info && typeof event.rate_limit_info === "object") rateLimit = event.rate_limit_info;
+        } else if (event.type === "stream_event" && !this.relay.used) {
+  deliver(event.event);
+        }
+      }
+      await this.relay.settled();
+      input.signal?.throwIfAborted();
+      if (this.relay.waitFailure) throw this.relay.waitFailure;
+
+      let message;
+      if (this.relay.used) {
+        if (this.relay.status !== 200 || !this.relay.capture.complete || !this.relay.capture.message) {
+          let detail = `status ${this.relay.status ?? "unknown"}, capture ${this.relay.capture.complete ? "complete" : "incomplete"}`;
+          if (this.relay.failure) detail += `, relay failure ${this.relay.failure}: ${this.relay.failureDetail}`;
+          if (this.relay.denied) detail += `, native retries denied ${this.relay.denied}`;
+          const upstreamError = this.relay.errorText();
+          if (upstreamError) detail += `, upstream said: ${upstreamError.slice(0, 500)}`;
+          throw new Error(`Incomplete Claude Code upstream response (${detail})`);
+        }
+        message = this.relay.capture.message;
+        sawMessageStop = true;
+      } else {
+        message = assistants.at(-1);
+      }
+
+      // A native API error may have no ordinary assistant/message_stop at all.
+      // Keep the reported cause instead of replacing it with "incomplete".
+      const nativeFailureHandled = this.relay.denied > 0 || message?.stop_reason === "refusal";
+      if (nativeError !== undefined && !nativeFailureHandled) throw new Error(`Claude Code API error: ${nativeError || "unknown native error"}`);
+
+      if (!message || !sawMessageStop || !result) {
+        throw new Error(
+          `Incomplete Claude Code response: assistant, message_stop and one result required${this.stderr ? ` (${this.stderr.trim().slice(-500)})` : ""}`,
+        );
+      }
+
+      const hasTools = message.content.some((block) => block.type === "tool_use");
+      const maxTurnsBoundary = hasTools && result.subtype === "error_max_turns";
+      if (!maxTurnsBoundary && !nativeFailureHandled && (result.is_error || result.subtype !== "success")) {
+        throw new Error(`Claude Code request failed: ${result.subtype ?? "unknown result"}`);
+      }
+
+      for (const block of message.content) {
+        if (block.type !== "tool_use") continue;
+        try {
+          harnessToolName(block.name, input.toolNames);
+        } catch (error) {
+          throw new ClaudeCodeError("Claude Code returned a tool outside the harness's current tool inventory", CODES.UNKNOWN_TOOL, { cause: error });
+        }
+      }
+
+      const usage = message.usage ?? result.usage;
+      if (!usage || typeof usage.input_tokens !== "number" || typeof usage.output_tokens !== "number") {
+        throw new Error("Claude Code response did not include complete token usage");
+      }
+
+      // The response is already charged at this point, but stopping here keeps
+      // the agent loop from issuing more requests against usage credits.
+      if (rateLimit?.isUsingOverage === true && !usageCreditsAllowed({ ...process.env, ...input.env })) {
+        throw usageCreditsChargeError(rateLimit);
+      }
+
+      return {
+        message,
+        result,
+        usage,
+        exitCode: this.child.exitCode ?? 0,
+        relay: {
+          upstreamRequests: Number(this.relay.used),
+          blockedRequests: this.relay.denied,
+          requestId: this.relay.requestId,
+        },
+        initialUserPrefix:
+          input.initialUserPrefix ?? deriveInitialUserPrefix(this.relay.originalRequestBody, canonicalInitialUser),
+        initialSystemMessages:
+          input.initialSystemMessages ?? deriveInitialSystemMessages(this.relay.originalRequestBody),
+        rateLimit,
+      };
+    } catch (error) {
+      if (!input.signal?.aborted && this.relay.waitFailure) throw this.relay.waitFailure;
+      throw error;
+    } finally {
+      input.signal?.removeEventListener("abort", abort);
+      this.relay.finishTurn();
+    }
+  }
+
+  /** Synchronous last-resort teardown for the process exit event. */
+  closeSync() {
+    this.closeNow();
+    try { rmSync(this.root, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+
+  async close() {
+    this.closeNow();
+    // A process Claude Code started in its own session (an MCP server, a hook) can keep its stdout
+    // open after the group is killed, so the stream never ends. Never let that hold up Escape or
+    // the next message: wait a bounded time, then drop the pipes ourselves.
+    const settled = Promise.allSettled([this.readTask, this.exitOutcome, this.relay.close()]);
+    let timer;
+    const bounded = new Promise((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), CLAUDE_PROCESS_CLOSE_GRACE_MS);
+      timer.unref?.();
+    });
+    if ((await Promise.race([settled, bounded])) === "timeout") {
+      this.child.stdout?.destroy();
+      this.child.stderr?.destroy();
+      this.queue.end(new Error("Claude Code was closed"));
+    }
+    clearTimeout(timer);
+    liveWorkers.delete(this);
+    await rm(this.root, { recursive: true, force: true });
+  }
+
+  closeNow() {
+    if (this.closed) return;
+    this.closed = true;
+    this.clearExpiryTimer();
+    this.relay.abort();
+    this.child.stdin?.destroy();
+    killProcessTree(this.child);
+  }
+
+  async exitError(fallback, signal) {
+    const outcome = await waitForOperation(this.exitOutcome, this.timeoutMs, "Claude Code process exit after stdout closed", signal);
+    if (outcome.error) return outcome.error;
+    const detail = this.stderr.trim().slice(-500);
+    return new Error(`${fallback} (exit ${outcome.code ?? "unknown"}${detail ? `: ${detail}` : ""})`);
+  }
+}
+
+/** How long closing a Claude Code process may wait for its streams before dropping them. */
+const CLAUDE_PROCESS_CLOSE_GRACE_MS = 2_000;
+
+const processCache = new Map();
+// Abort settles the UI immediately, but session shutdown/tests must still be
+// able to await the bounded teardown of one-shot workers, not just warm ones.
+const pendingClosures = new Map();
+let managerTail = Promise.resolve();
+
+async function withManagerLock(operation, signal) {
+  const previous = managerTail;
+  let release;
+  managerTail = new Promise((resolve) => (release = resolve));
+  try {
+    await waitForOperation(previous, 180_000, "Claude Code process manager", signal);
+  } catch (error) {
+    // Keep the lock chain ordered even when a queued caller stops waiting.
+    void previous.then(release, release);
+    throw error;
+  }
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+async function expireProcess(sessionId, worker) {
+  const expired = await withManagerLock(() => {
+    if (processCache.get(sessionId) !== worker || worker.busy || !worker.isExpired()) return false;
+    processCache.delete(sessionId);
+    return true;
+  });
+  if (expired) await worker.close();
+}
+
+/** Drop a worker from the warm cache (if it is still there) and close it. */
+async function discardProcess(acquired) {
+  const { sessionId, worker } = acquired;
+  if (sessionId && processCache.get(sessionId) === worker) {
+    await withManagerLock(() => {
+      if (processCache.get(sessionId) === worker) processCache.delete(sessionId);
+    });
+  }
+  await worker.close();
+}
+
+async function acquireProcess(input, plan) {
+  return withManagerLock(async () => {
+    const sessionId = input.sessionId;
+    const cached = sessionId ? processCache.get(sessionId) : undefined;
+    if (cached && !cached.busy) {
+      cached.clearExpiryTimer();
+      if (
+        cached.isAlive() &&
+        !cached.isExpired() &&
+        cached.fingerprint === plan.fingerprint &&
+        cached.canContinue(input)
+      ) {
+        cached.busy = true;
+        return { worker: cached, retained: true, continuation: true, sessionId };
+      }
+      processCache.delete(sessionId);
+      await cached.close();
+    }
+
+    // A concurrent request must not mutate the cached conversation. It gets a
+    // one-shot process, as does a request without a stable session ID.
+    const retain = !!sessionId && !cached?.busy;
+    if (retain) {
+      while (processCache.size >= MAX_CACHED_CLAUDE_PROCESSES) {
+        const victim = [...processCache.entries()]
+          .filter(([, worker]) => !worker.busy)
+          .sort((left, right) => left[1].lastUsed - right[1].lastUsed)[0];
+        if (!victim) break;
+        processCache.delete(victim[0]);
+        await victim[1].close();
+      }
+    }
+
+    const worker = await ClaudeProcess.create(input, plan);
+    if (input.signal?.aborted) {
+      await worker.close();
+      input.signal.throwIfAborted();
+    }
+    worker.busy = true;
+    const retained = retain && processCache.size < MAX_CACHED_CLAUDE_PROCESSES;
+    if (retained) processCache.set(sessionId, worker);
+    return { worker, retained, continuation: false, sessionId };
+  }, input.signal);
+}
+
+/** Close warm Claude processes for one harness session, or all sessions. */
+export async function closeClaudeProcesses(sessionId) {
+  const workers = await withManagerLock(() => {
+    if (sessionId) {
+      const worker = processCache.get(sessionId);
+      processCache.delete(sessionId);
+      return worker ? [worker] : [];
+    }
+    const all = [...processCache.values()];
+    processCache.clear();
+    return all;
+  });
+  const pending = [...pendingClosures].filter(([, owner]) => !sessionId || owner === sessionId).map(([closing]) => closing);
+  await Promise.allSettled([...workers.map((worker) => worker.close()), ...pending]);
+}
+
+/** Test/debug visibility without exposing child processes themselves. */
+export function cachedClaudeProcessCount() {
+  return processCache.size;
+}
+
+/// Every worker not yet closed, warm or one-shot. A host that exits without closing its routes (a headless run
+/// ends with process.exit) must not leave a Claude Code process group or its temp folder behind, so the exit
+/// event kills whatever is still alive. Only synchronous work is allowed there.
+const liveWorkers = new Set();
+let exitHookInstalled = false;
+
+function installExitHook() {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.on("exit", () => {
+    for (const worker of liveWorkers) worker.closeSync();
+    liveWorkers.clear();
+  });
+}
+
+/** Test seam: how many workers are alive (warm or running). */
+export function liveClaudeWorkerCount() {
+  return liveWorkers.size;
+}
+
+export async function runClaudeRequest(request) {
+  request.signal?.throwIfAborted();
+  const input = request;
+  input.signal?.throwIfAborted();
+  const plan = launchPlan(input);
+  // Acquisition (lock, auth, relay startup) is a non-streaming wait. Its deadline
+  // must be disarmed before running the turn: timeoutMs is an HTTP idle budget.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(new ClaudeWaitLimitError("Claude Code worker acquisition exceeded its wait limit")), plan.timeoutMs);
+  const signal = input.signal ? AbortSignal.any([input.signal, deadline.signal]) : deadline.signal;
+  let acquired;
+  try {
+    acquired = await acquireProcess({ ...input, signal }, plan);
+  } finally {
+    clearTimeout(timer);
+  }
+  try {
+    const output = await acquired.worker.run(input, acquired.continuation);
+    const stable = acquired.worker.commit(input, output.message);
+    if (
+      stable &&
+      acquired.retained &&
+      acquired.sessionId &&
+      processCache.get(acquired.sessionId) === acquired.worker
+    ) {
+      acquired.worker.busy = false;
+      acquired.worker.armExpiryTimer(() => {
+        void expireProcess(acquired.sessionId, acquired.worker);
+      });
+    } else {
+      await discardProcess(acquired);
+    }
+    return output;
+  } catch (error) {
+    // An interrupted turn (Escape) settles at once: the harness must be ready for the next message even
+    // while the old process is still being torn down.
+    if (input.signal?.aborted) {
+      const closing = discardProcess(acquired);
+      pendingClosures.set(closing, acquired.sessionId);
+      void closing.then(() => pendingClosures.delete(closing), () => pendingClosures.delete(closing));
+    } else await discardProcess(acquired);
+    throw error;
+  }
+}
