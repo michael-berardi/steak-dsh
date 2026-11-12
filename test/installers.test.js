@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, symlinkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,7 +49,10 @@ test("both installers mark their shims and never overwrite a file they did not w
   assert.match(ps1, /function Write-Shim/);
   assert.doesNotMatch(ps1, /Set-Content\s+-Path\s+\$shim/);
   assert.match(sh, /shim_ours "\$BIN_DIR\/dsh"/);
-  assert.match(sh, /shim_ours "\$LAUNCHER" 'STEAK_DSH_DSH_BIN'/);
+  assert.match(sh, /shim_ours "\$LAUNCHER" '\^exec "\.\*\/app\/current\/bin\/steak-dsh" /);
+  assert.doesNotMatch(sh, /shim_ours "\$LAUNCHER" 'STEAK_DSH_DSH_BIN'/, "the bare variable name also matches a symlink to a real launcher");
+  assert.doesNotMatch(ps1, /-LegacyPattern 'STEAK_DSH_DSH_BIN'/);
+  assert.match(ps1, /LinkType/, "install.ps1 must refuse an unmarked symlink");
   assert.doesNotMatch(sh, /"\$found" = "\$BIN_DIR\/dsh"/, "a marked shim is ours wherever it sits on PATH");
 });
 
@@ -117,12 +120,32 @@ test("install.sh writes marked shims, and a re-run replaces them (also a 0.2.0 l
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(readFileSync(join(f.bin, "dsh"), "utf8"), /steak-dsh installer shim/);
   assert.match(readFileSync(join(f.bin, "steak-dsh"), "utf8"), /steak-dsh installer shim/);
-  writeFileSync(join(f.bin, "steak-dsh"), '#!/bin/sh\nSTEAK_DSH_DSH_BIN="old"\nexport STEAK_DSH_DSH_BIN\nexec old\n');
+  writeFileSync(join(f.bin, "steak-dsh"), '#!/bin/sh\nSTEAK_DSH_DSH_BIN="old"\nexport STEAK_DSH_DSH_BIN\nexec "/old/home/app/current/bin/steak-dsh" "$@"\n');
   r = f.run({ PATH: `${f.bin}:${dirname(process.execPath)}:/usr/bin:/bin` });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.doesNotMatch(r.stdout, /leaving it alone/);
   assert.doesNotMatch(r.stdout, /already on PATH/, "our own marked dsh shim is not the user's dsh");
   assert.match(readFileSync(join(f.bin, "steak-dsh"), "utf8"), /steak-dsh installer shim/);
+});
+
+test("install.sh leaves a symlink to a real steak-dsh launcher alone, even one that names the legacy variable", (t) => {
+  const f = fixture(t);
+  const real = join(f.bin, "..", "real-launcher");
+  writeFileSync(real, '#!/bin/sh\nSTEAK_DSH_DSH_BIN="x"\nexec "/usr/lib/node_modules/steak-dsh/app/current/bin/steak-dsh" "$@"\n');
+  symlinkSync(real, join(f.bin, "steak-dsh"));
+  const r = f.run();
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok(lstatSync(join(f.bin, "steak-dsh")).isSymbolicLink(), "the symlink must not be replaced");
+  assert.match(r.stdout, /steak-dsh is not a file this installer wrote/);
+});
+
+test("install.sh leaves an unmarked regular file that only mentions STEAK_DSH_DSH_BIN alone", (t) => {
+  const f = fixture(t);
+  const text = '#!/bin/sh\necho STEAK_DSH_DSH_BIN is mine\n';
+  writeFileSync(join(f.bin, "steak-dsh"), text);
+  const r = f.run();
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(join(f.bin, "steak-dsh"), "utf8"), text);
 });
 
 test("install.sh does not leave a user's own steak-dsh command replaced", (t) => {
@@ -142,4 +165,48 @@ test("install.sh does not claim it added Steak DSH to dsh when plugin add failed
   assert.match(r.stdout, /warning: could not add the bundle/);
   assert.doesNotMatch(r.stdout, /added Steak DSH to it|installed DeepSeek Harness and Steak DSH/);
   assert.match(r.stdout, /not in the dsh headless profile yet/);
+});
+
+// ---- Windows user Path: static guards and a pure-function test under PowerShell 7 when it is installed
+
+test("install.ps1 edits the user Path through the registry, never through the expanded environment API", () => {
+  const code = ps1.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+  assert.doesNotMatch(code, /SetEnvironmentVariable\(\s*'Path'/i, "SetEnvironmentVariable('Path') stores REG_SZ and hard-codes expanded entries");
+  assert.doesNotMatch(code, /GetEnvironmentVariable\(\s*'Path'/i, "GetEnvironmentVariable('Path') returns the expanded value");
+  assert.match(code, /OpenSubKey\('Environment', \$true\)/);
+  assert.match(code, /DoNotExpandEnvironmentNames/);
+  assert.match(code, /GetValueKind\('Path'\)/, "the existing registry type is kept");
+  assert.match(code, /RegistryValueKind\]::ExpandString/);
+  assert.match(code, /finally \{ if \(\$envKey\) \{ \$envKey\.Close\(\) \} \}/);
+});
+
+test("build-release.sh does not hide a tar failure behind a pipe", () => {
+  assert.doesNotMatch(build, /tar [^\n]*-cf - [^\n]*\|\s*gzip/);
+  assert.match(build, /gzip -n < "\$stage\.tar"/);
+});
+
+const pwsh = spawnSync("pwsh", ["-NoProfile", "-Command", "1"], { encoding: "utf8" }).status === 0;
+test("Test-PathHasEntry: literal, expanded, case and trailing-backslash matches", { skip: pwsh ? false : "pwsh is not installed" }, (t) => {
+  const m = ps1.match(/  function Test-PathHasEntry \{[\s\S]*?\n  \}\n/);
+  assert.ok(m, "Test-PathHasEntry must stay a standalone function");
+  const dir = mkdtempSync(join(tmpdir(), "steak-dsh-pathtest-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const script = join(dir, "t.ps1");
+  writeFileSync(script, m[0] + `
+$env:SDSH_TEST_HOME = '/home/u'
+$cases = @(
+  @('/a;/home/u/bin;/b', '/home/u/bin', $true),
+  @('/a;%SDSH_TEST_HOME%/bin;/b', '/home/u/bin', $true),
+  @('/a;/HOME/U/BIN\\;/b', '/home/u/bin', $true),
+  @('/a;/home/u/bin', '/home/u/bin\\', $true),
+  @('/a;/home/u/binx;/b', '/home/u/bin', $false),
+  @('', '/home/u/bin', $false),
+  @(';;/a', '/home/u/bin', $false)
+)
+foreach ($c in $cases) { if ((Test-PathHasEntry -PathValue $c[0] -Entry $c[1]) -ne $c[2]) { Write-Output ('FAIL ' + $c[0]); exit 1 } }
+Write-Output 'ok'
+`);
+  const r = spawnSync("pwsh", ["-NoProfile", "-File", script], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /ok/);
 });

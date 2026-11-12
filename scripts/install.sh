@@ -202,7 +202,9 @@ NODE_PATH_LINE=""
 # the legacy pattern also recognises the shape of earlier releases). Never replace a file the user put there.
 shim_ours() {
   { [ ! -e "$1" ] && [ ! -L "$1" ]; } && return 0
-  grep -qE "$SHIM_MARK${2:+|$2}" "$1" 2>/dev/null && return 0
+  grep -qF "$SHIM_MARK" "$1" 2>/dev/null && return 0
+  # Unmarked: only a regular file (never a symlink, which may point at a real launcher) of the earlier shim shape.
+  { [ -f "$1" ] && [ ! -L "$1" ] && [ -n "${2-}" ] && grep -qE "$2" "$1" 2>/dev/null; } && return 0
   say "steak-dsh install: $1 is not a file this installer wrote; leaving it alone."
   return 1
 }
@@ -244,9 +246,9 @@ else
 fi
 
 # `steak-dsh` on PATH: points at the dsh we resolved and, when fetched, at the private Node.
-# Shims written by 0.2.0 carry no marker line but always name STEAK_DSH_DSH_BIN, which marks them as ours.
+# Shims written by 0.2.0 carry no marker line; a regular file (not a symlink) with their exact shape is ours.
 LAUNCHER="$BIN_DIR/steak-dsh"
-if shim_ours "$LAUNCHER" 'STEAK_DSH_DSH_BIN'; then
+if shim_ours "$LAUNCHER" '^exec ".*/app/current/bin/steak-dsh" "\$@"[[:space:]]*$'; then
 cat > "$BIN_DIR/steak-dsh.tmp.$$" <<WRAP
 #!/bin/sh
 # $SHIM_MARK: runs Steak DSH. Delete this file to remove the command.

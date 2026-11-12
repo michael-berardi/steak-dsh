@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 - 2026-11-12
+
+Fixes to the one-step installers.
+
+- Windows: `install.ps1` no longer rewrites your whole user Path with expanded values. Before, adding the bin folder
+  turned entries such as `%USERPROFILE%\AppData\Local\Microsoft\WindowsApps` into fixed paths and changed the
+  value's type so `%VAR%` entries stopped working. It now reads the raw value, appends only when the folder is
+  missing, and keeps the existing type.
+- Both installers: an unmarked `steak-dsh` file is treated as an older shim only when it is a regular file (not a
+  symlink, such as one from `npm -g`) with the exact 0.2.0 shim shape. Before, any file naming `STEAK_DSH_DSH_BIN`,
+  including a symlink to a real launcher, could be replaced.
+- `build-release.sh` no longer hides a failing `tar` behind a pipe.
+
 ## 0.3.0 - 2026-11-12
 
 - `steak-dsh tui`: a full-screen terminal UI close to the Steak Pi one. One long-lived `dsh --profile sdk` child over

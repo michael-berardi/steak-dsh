@@ -38,7 +38,11 @@ if tar --version 2>/dev/null | grep -qi gnu; then
   tar -C "$stage" --owner=0 --group=0 --numeric-owner --mtime=@0 --no-recursion -czf "$OUT/steak-dsh.tar.gz" -T "$stage.list"
 else
   # bsdtar cannot leave the time out of the gzip header itself, so compress with `gzip -n`.
-  COPYFILE_DISABLE=1 tar -C "$stage" --uid 0 --gid 0 --uname root --gname root --no-xattrs --no-recursion -cf - -T "$stage.list" | gzip -n > "$OUT/steak-dsh.tar.gz"
+  # A temp tar first, so a tar failure is not hidden by a pipe.
+  COPYFILE_DISABLE=1 tar -C "$stage" --uid 0 --gid 0 --uname root --gname root --no-xattrs --no-recursion -cf "$stage.tar" -T "$stage.list" \
+    || { echo "build-release: tar failed" >&2; exit 1; }
+  gzip -n < "$stage.tar" > "$OUT/steak-dsh.tar.gz" || { echo "build-release: gzip failed" >&2; exit 1; }
+  rm -f "$stage.tar"
 fi
 rm -f "$stage.list"
 cp scripts/install.sh scripts/install.ps1 "$OUT/"

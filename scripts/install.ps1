@@ -67,14 +67,31 @@ function Install-SteakDsh {
     catch { throw "download failed: $Url ($($_.Exception.Message))" }
   }
 
+  # Test-PathHasEntry: $true when <PathValue> (a raw, unexpanded Path) already lists <Entry>, literally or once its
+  # %VAR% parts are expanded; case-insensitive, ignoring a trailing backslash. Pure: no registry access.
+  function Test-PathHasEntry {
+    param([string]$PathValue, [string]$Entry)
+    $want = $Entry.TrimEnd('\')
+    foreach ($e in ($PathValue -split ';')) {
+      if (-not $e) { continue }
+      if (($e.TrimEnd('\') -ieq $want) -or ([Environment]::ExpandEnvironmentVariables($e).TrimEnd('\') -ieq $want)) { return $true }
+    }
+    return $false
+  }
+
   # Write-Shim <path> <lines> <legacy-pattern>: never overwrites a file this installer did not write. Ours carry the
   # marker line (<legacy-pattern> also recognises the shape of earlier releases). Returns $true when written.
   function Write-Shim {
     param([string]$Path, [string[]]$Lines, [string]$LegacyPattern = '', [switch]$Cmd)
     if (Test-Path -LiteralPath $Path) {
-      $pattern = [regex]::Escape($shimMarker)
-      if ($LegacyPattern) { $pattern = "$pattern|$LegacyPattern" }
-      if (-not (Select-String -LiteralPath $Path -Pattern $pattern -Quiet -ErrorAction SilentlyContinue)) {
+      $item = Get-Item -LiteralPath $Path -Force
+      $isLink = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or [bool]$item.LinkType
+      $text = ''
+      if (-not $item.PSIsContainer) { $text = [string](Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue) }
+      # An unmarked file counts as ours only when it is a regular file (not a symlink, which could point at a real
+      # launcher) with the exact 0.2.0 shim shape.
+      $ours = $text.Contains($shimMarker) -or ($LegacyPattern -and -not $isLink -and -not $item.PSIsContainer -and ($text -match $LegacyPattern))
+      if (-not $ours) {
         Write-Host "steak-dsh install: $Path is not a file this installer wrote; leaving it alone."
         return $false
       }
@@ -385,13 +402,13 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
     }
 
     # `steak-dsh` on PATH: points at the dsh we resolved and, when fetched, at the private Node.
-    # Shims written by 0.2.0 carry no marker line but always name STEAK_DSH_DSH_BIN, which marks them as ours.
+    # Shims written by 0.2.0 carry no marker line; a regular file (not a symlink) with their exact shape is ours.
     if ($onWindows) {
       $lines = @('@echo off', "rem $shimMarker`: runs Steak DSH. Delete this file to remove the command.", "if `"%STEAK_DSH_DSH_BIN%`"==`"`" set `"STEAK_DSH_DSH_BIN=$(Get-CmdPath $dshBin)`"")
       if ($nodePathCmd) { $lines += $nodePathCmd }
       $lines += "node `"$(Get-CmdPath $current)\bin\steak-dsh`" %*"
       $shim = Join-Path $binDir 'steak-dsh.cmd'
-      $shimWritten = Write-Shim -Path $shim -Lines $lines -LegacyPattern 'STEAK_DSH_DSH_BIN' -Cmd
+      $shimWritten = Write-Shim -Path $shim -Lines $lines -LegacyPattern '(?m)^node "[^"]*[\\/]bin[\\/]steak-dsh" %\*\s*$' -Cmd
       $doctorExe = 'cmd.exe'
       $doctorArgs = @('/c', $shim, 'doctor')
     } else {
@@ -399,7 +416,7 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
       if ($nodePathSh) { $lines += $nodePathSh }
       $lines += "exec `"$current/bin/steak-dsh`" `"`$@`""
       $shim = Join-Path $binDir 'steak-dsh'
-      $shimWritten = Write-Shim -Path $shim -Lines $lines -LegacyPattern 'STEAK_DSH_DSH_BIN'
+      $shimWritten = Write-Shim -Path $shim -Lines $lines -LegacyPattern '(?m)^exec "[^"]*/app/current/bin/steak-dsh" "\$@"\s*$'
       $doctorExe = $shim
       $doctorArgs = @('doctor')
     }
@@ -419,12 +436,21 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
     if ($shimWritten) { Write-Host "Steak DSH $version installed ($(Join-Path $binDir 'steak-dsh'))." }
     else { Write-Host "Steak DSH $version installed; the launcher is $(Join-Path $current 'bin/steak-dsh')." }
     if ($onWindows) {
-      $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-      if (-not (($userPath -split ';') -contains $binDir)) {
-        $newPath = if ($userPath) { $userPath.TrimEnd(';') + ';' + $binDir } else { $binDir }
-        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-        Write-Host "Added $binDir to your user PATH; open a new terminal to use steak-dsh."
-      }
+      # The raw value is read without expanding %VAR% entries, and written back with the same registry type.
+      $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+      try {
+        $userPath = [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if (-not (Test-PathHasEntry -PathValue $userPath -Entry $binDir)) {
+          $newPath = if ($userPath) { $userPath.TrimEnd(';') + ';' + $binDir } else { $binDir }
+          $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+          if ($userPath) { $kind = $envKey.GetValueKind('Path') }
+          $envKey.SetValue('Path', $newPath, $kind)
+          # Setting any user variable broadcasts the environment change so new terminals pick the Path up.
+          [Environment]::SetEnvironmentVariable('STEAK_DSH_PATH_REFRESH', '1', 'User')
+          [Environment]::SetEnvironmentVariable('STEAK_DSH_PATH_REFRESH', $null, 'User')
+          Write-Host "Added $binDir to your user PATH; open a new terminal to use steak-dsh."
+        }
+      } finally { if ($envKey) { $envKey.Close() } }
     } else {
       if (($env:PATH -split [IO.Path]::PathSeparator) -notcontains $binDir) {
         Write-Host ('Add ' + $binDir + ' to your PATH:  export PATH="' + $binDir + ':$PATH"')
