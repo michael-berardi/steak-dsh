@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-11-12
 
 - One bundle, one profile. A new tool, `more_tools` (plugin `steak-more-tools`), costs about 250 bytes on the first
   request. When the model calls it, the subagent tool, its follow-up tool and the working-directory switch are switched
@@ -10,6 +10,12 @@
   times, never on subagent children, and costs no tool text).
 - `--long` is still accepted and still works; it is now only a preload of the same rows before the first request.
   `long.patch.yml` no longer carries the finish guard row, since the bundle has it on. `--stock` is unchanged.
+- Measured with ParetoBench on one model, 3 repeats, paired, 95% intervals, against the 0.4.0 bundle: 20 short tasks
+  cost 1.03 times (0.92 to 1.16), no clear difference, 60 of 60 correct (0.4.0 got 59 of 60); 11 long tasks cost 1.04
+  times (0.88 to 1.19), no clear difference, 33 of 33 correct on both. So the one extra tool costs nothing measurable.
+- Not shown: in those runs the model never called `more_tools` and the finish guard never acted, so they show no harm,
+  not a benefit. In a live check a prompt that asked for a subagent called `more_tools`, then `subagent`, and answered
+  correctly with no flag. The switch lasts for one dsh process: a resumed session offers `more_tools` again.
 
 ## 0.4.0 - 2026-11-12
 
