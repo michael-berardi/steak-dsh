@@ -24,7 +24,7 @@ const discovery = flag("--system-prompt-file") === undefined;
 record({
   event: "launch", discovery, model: flag("--model"), ppid: process.ppid,
   baseUrlSet: Boolean(env.ANTHROPIC_BASE_URL), apiKeySet: Boolean(env.ANTHROPIC_API_KEY),
-  extraBody: (() => { try { return JSON.parse(JSON.stringify(env.CLAUDE_CODE_EXTRA_BODY ? "set" : "unset")); } catch { return undefined; } })(),
+  mcpCommands: (() => { try { return Object.entries(JSON.parse(flag("--mcp-config")).mcpServers ?? {}).map(([name, s]) => ({ name, script: String(s.args?.[0] ?? "").split("/").pop() })); } catch { return undefined; } })(),
   maxTurns: flag("--max-turns"), tools: flag("--tools"),
 });
 
@@ -33,16 +33,23 @@ const CATALOG = JSON.parse(env.FAKE_CLAUDE_CATALOG ?? "null") ?? [
   { value: "small", displayName: "Small", description: "Fast row" },
 ];
 
-const sseEvent = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+const allFrames = [];
+const summary = () => allFrames.map((f) => ({ type: f.type, shouldQuery: f.shouldQuery, blocks: f.message?.content?.map((b) => b.type) ?? [], signature: f.message?.content?.find((b) => b.signature)?.signature }));
 
 function nativeMessage() {
   const content = [];
+  const last = allFrames.at(-1);
+  const afterToolResult = last?.message?.content?.some((b) => b.type === "tool_result");
+  if (modes.has("tool-then-text") && afterToolResult) {
+    return { id: "msg_done", role: "assistant", content: [{ type: "text", text: env.FAKE_CLAUDE_TEXT ?? "done" }], stop_reason: "end_turn", usage: { input_tokens: 4, output_tokens: 2 } };
+  }
+  const useTool = modes.has("tool") || modes.has("tool-then-text");
   if (modes.has("thinking")) content.push({ type: "thinking", thinking: "pondering", signature: "sig-1" });
   content.push({ type: "text", text: env.FAKE_CLAUDE_TEXT ?? "fake reply" });
-  if (modes.has("tool")) content.push({ type: "tool_use", id: "toolu_1", name: `mcp__dsh__${env.FAKE_CLAUDE_TOOL ?? "echo"}`, input: JSON.parse(env.FAKE_CLAUDE_TOOL_INPUT ?? "{}") });
+  if (useTool) content.push({ type: "tool_use", id: "toolu_1", name: `mcp__dsh__${env.FAKE_CLAUDE_TOOL ?? "echo"}`, input: JSON.parse(env.FAKE_CLAUDE_TOOL_INPUT ?? "{}") });
   return {
     id: "msg_fake", role: "assistant", content,
-    stop_reason: modes.has("tool") ? "tool_use" : "end_turn",
+    stop_reason: useTool ? "tool_use" : "end_turn",
     usage: { input_tokens: 11, output_tokens: 7, cache_read_input_tokens: 5, cache_creation_input_tokens: 3, ...(modes.has("thinking") ? { output_tokens_details: { thinking_tokens: 2 } } : {}) },
   };
 }
@@ -83,7 +90,7 @@ function post(path, body) {
 }
 
 async function answer(frames) {
-  record({ event: "query", frames: frames.length });
+  record({ event: "query", frames: summary() });
   if (modes.has("hang")) {
     const child = spawn("sleep", ["300"], { stdio: "ignore" });
     record({ event: "grandchild", child: child.pid });
@@ -101,12 +108,12 @@ async function answer(frames) {
     }
     if (modes.has("billing")) emit({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "five_hour", isUsingOverage: true } });
     else emit({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "five_hour", isUsingOverage: false } });
-    emit({ type: "result", subtype: modes.has("tool") ? "error_max_turns" : "success", is_error: false, num_turns: 1 });
+    emit({ type: "result", subtype: message.stop_reason === "tool_use" ? "error_max_turns" : "success", is_error: false, num_turns: 1 });
     return;
   }
   directStream(message);
   if (modes.has("billing")) emit({ type: "rate_limit_event", rate_limit_info: { status: "allowed", isUsingOverage: true } });
-  emit({ type: "result", subtype: modes.has("tool") ? "error_max_turns" : "success", is_error: false, num_turns: 1, usage: message.usage });
+  emit({ type: "result", subtype: message.stop_reason === "tool_use" ? "error_max_turns" : "success", is_error: false, num_turns: 1, usage: message.usage });
 }
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -120,6 +127,8 @@ for await (const line of lines) {
   }
   if (discovery) continue;
   frames += 1;
+  allFrames.push(frame);
+  if (frame.type !== "user") continue; // assistant frames are history
   if (frame.shouldQuery === false) { emit({ type: "result", subtype: "success", is_error: false, num_turns: 0 }); continue; }
   await answer(frames);
 }

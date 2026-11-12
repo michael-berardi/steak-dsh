@@ -105,6 +105,7 @@ const statusCache = new Map();
 export function resetClaudeStatusCache() {
   statusInFlight.clear();
   statusCache.clear();
+  readyStatusCache.clear();
 }
 
 export async function getClaudeStatus(

@@ -32,9 +32,10 @@ class ChunkQueue {
 
 /**
  * @param {object} harness result of loadHarness()
- * @param {{env?: () => Record<string, string|undefined>, timeoutMs?: number, report?: (message: string) => void}} [settings]
+ * @param {{env?: () => Record<string, string|undefined>, timeoutMs?: number, report?: (message: string) => void, upstreamUrl?: string}} [settings]
+ * `upstreamUrl` is a test seam (HTTPS, or loopback HTTP); the plugin never sets it, so requests go to the vendor's API.
  */
-export function createClaudeCodeAdapter(harness, { env = () => process.env, timeoutMs, report } = {}) {
+export function createClaudeCodeAdapter(harness, { env = () => process.env, timeoutMs, report, upstreamUrl } = {}) {
   const { LlmAdapter, LlmError } = harness;
 
   const fail = (error) => {
@@ -116,6 +117,7 @@ export function createClaudeCodeAdapter(harness, { env = () => process.env, time
           toolNames: prepared.names,
           signal,
           timeoutMs,
+          upstreamUrl,
           env: env(),
           initialUserPrefix: getInitialUserPrefix(options.messages),
           initialSystemMessages: getInitialSystemMessages(options.messages),
