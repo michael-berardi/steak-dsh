@@ -1,6 +1,7 @@
-# Steak DSH long-work profile. Applied after cordis.patch.yml, by `steak-dsh run --long` or by hand:
+# Steak DSH long-work preload. Applied after cordis.patch.yml, by `steak-dsh run --long` or by hand:
 #   dsh headless --patch <bundle>/cordis.patch.yml --patch <bundle>/long.patch.yml "<task>"
-# The default bundle is tuned for one-shot tasks. A long, multi-step or delegating task needs the rows below.
+# The default bundle needs no profile: its more_tools tool switches these rows on when the model asks. This file only
+# does it before the first request, for scripts that pass --long. The finish guard is on in the default bundle.
 
 # Delegation: the subagent tool, the follow-up tool for a running child, and the working-directory switch.
 - id: tool-subagent
@@ -8,10 +9,6 @@
 - id: tool-subagent-control
   disabled: false
 - id: tool-working-directory
-  disabled: false
-
-# A long task is where a turn ends with parts still open. Subagent children are left alone.
-- id: steak-finish-guard
   disabled: false
 
 # An oversized tool result keeps its head and tail inline and a path to the full text.

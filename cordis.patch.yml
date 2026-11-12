@@ -27,12 +27,16 @@
     - id: steak-rules
       name: ./plugins/rules.js
       config: {}
-    # Off by default: in the benchmark it never had to act. Turn it on from your profile patch with
+    # One small tool that switches the heavier tools (subagents, follow-up, working directory) on when the model asks.
+    - id: steak-more-tools
+      name: ./plugins/more-tools.js
+      config: {}
+    # Acts only when a turn ends with open todo items or a reply that reports unfinished work (at most 3 pushes,
+    # never on subagent children). It costs no schema text. Switch it off from your profile patch with
     #   - id: steak-finish-guard
-    #     disabled: false
+    #     disabled: true
     - id: steak-finish-guard
       name: ./plugins/finish-guard.js
-      disabled: true
       config:
         maxPushes: 3
     - id: steak-verify-after-edit

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- One bundle, one profile. A new tool, `more_tools` (plugin `steak-more-tools`), costs about 250 bytes on the first
+  request. When the model calls it, the subagent tool, its follow-up tool and the working-directory switch are switched
+  on through the loader and are in the next request, with the spill budget `--long` used. Deferred tool loading was not
+  used: the OpenAI-compatible adapter drops tools marked deferred.
+- The finish guard is on by default (it acts only on open todo items or a reply reporting unfinished work, at most 3
+  times, never on subagent children, and costs no tool text).
+- `--long` is still accepted and still works; it is now only a preload of the same rows before the first request.
+  `long.patch.yml` no longer carries the finish guard row, since the bundle has it on. `--stock` is unchanged.
+
 ## 0.4.0 - 2026-11-12
 
 - New model route `claude-code`: requests run through the official Claude Code command on your own subscription login,

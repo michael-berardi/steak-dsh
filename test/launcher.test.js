@@ -387,12 +387,12 @@ test("--long: the shipped profile patch is applied right after the bundle; the d
   } finally { rmSync(d.dir, { recursive: true, force: true }); }
 });
 
-test("the long-work profile only switches rows the bundle ships switched the other way, and never goal or workflow tools", () => {
+test("the long-work profile only switches rows the bundle ships switched the other way (the guard is on in the bundle), and never goal or workflow tools", () => {
   const ids = (text, state) => new Set([...text.matchAll(new RegExp(`- id: (\\S+)\\n(?:\\s+name: \\S+\\n)?\\s+disabled: ${state}`, "g"))].map((m) => m[1]));
   const disabledByBundle = ids(readFileSync(bundlePatch, "utf8"), "true");
   const profile = readFileSync(longPatch, "utf8");
   const enabled = [...ids(profile, "false")];
-  assert.deepEqual(enabled, ["tool-subagent", "tool-subagent-control", "tool-working-directory", "steak-finish-guard"]);
+  assert.deepEqual(enabled, ["tool-subagent", "tool-subagent-control", "tool-working-directory"]);
   for (const id of enabled) assert.ok(disabledByBundle.has(id), `${id} is off in the bundle, so the profile has something to turn on`);
   assert.equal(ids(profile, "true").size, 0, "the profile switches nothing off");
   for (const id of ["tool-goal", "goal-round-driver", "command-goal", "tool-workflow", "tool-subagent-fork", "session-title-llm"]) {
@@ -401,7 +401,7 @@ test("the long-work profile only switches rows the bundle ships switched the oth
   }
   assert.match(profile, /- id: spill-policy\n\s+config:\n\s+maxInlineTokens: 12500\n/);
   assert.deepEqual([...profile.matchAll(/^- id: (\S+)/gm)].map((m) => m[1]),
-    ["tool-subagent", "tool-subagent-control", "tool-working-directory", "steak-finish-guard", "spill-policy"], "exactly these five rows");
+    ["tool-subagent", "tool-subagent-control", "tool-working-directory", "spill-policy"], "exactly these four rows: the finish guard is on in the bundle");
   assert.deepEqual(buildRows({ long: true, noShell: true, ownedPaths: [], patches: [] }, root),
     [{ id: "tool-bash", disabled: true }, { id: "tool-pwsh", disabled: true }, { id: "tool-jobs", disabled: true }],
     "the profile adds no generated row; --no-shell still does");
