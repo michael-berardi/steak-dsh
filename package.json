@@ -27,6 +27,7 @@
   },
   "files": [
     "plugins",
+    "claude-code",
     "bin",
     "lib",
     "cordis.patch.yml",

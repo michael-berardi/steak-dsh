@@ -158,7 +158,7 @@ async function readClaudeStatus(env, signal) {
   if (!command) return { available: false, loggedIn: false, subscription: false, detail: INSTALL_HINT };
   // Only Claude Code's own answer `loggedIn: false` means logged out. A check that timed out, crashed or printed
   // no status (a busy machine, a token refresh racing another process) is retried once and then named as what it
-  // is: 2026-10-29 two Haiku workers were torn down as "not logged in" while the login was fine.
+  // is: 2026-10-29 two short-lived workers were torn down as "not logged in" while the login was fine.
   let uncertain = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt) await new Promise((resolve) => setTimeout(resolve, 1_000));

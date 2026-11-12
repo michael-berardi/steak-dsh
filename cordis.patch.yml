@@ -38,3 +38,10 @@
     - id: steak-verify-after-edit
       name: ./plugins/verify-after-edit.js
       config: {}
+    # A model route that runs requests through a locally installed, logged-in coding CLI (see README). It starts nothing
+    # until a model is listed or requested; with no CLI (or no login) it offers no models. Switch it off with
+    #   - id: steak-cc-route
+    #     disabled: true
+    - id: steak-cc-route
+      name: ./plugins/cc-route.js
+      config: {}

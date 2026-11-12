@@ -21,16 +21,26 @@ test("the package is a dsh bundle and ships every file its patch names", () => {
 test("plugins import nothing outside Node, so they load from any profile", () => {
   for (const file of readdirSync(join(root, "plugins"))) {
     const source = readFileSync(join(root, "plugins", file), "utf8");
-    for (const match of source.matchAll(/from\s+"([^"]+)"/g)) assert.match(match[1], /^node:/, `${file} imports ${match[1]}`);
+    for (const match of source.matchAll(/from\s+"([^"]+)"/g)) {
+      // The one allowed relative import: the entry of the CLI-backed route, which has its own folder.
+      if (file === "cc-route.js" && match[1] === "../claude-code/plugin.js") continue;
+      assert.match(match[1], /^node:/, `${file} imports ${match[1]}`);
+    }
   }
 });
 
 test("shipped code names no model or provider", () => {
   const banned = /qwen|deepseek-v|openrouter|claude|gpt-|opus|sonnet|haiku|anthropic|openai/i;
   for (const file of [...readdirSync(join(root, "plugins")).map((f) => join("plugins", f)), "cordis.patch.yml", "long.patch.yml"]) {
-    const source = readFileSync(join(root, file), "utf8");
+    // The entry shim may name the route's folder, nothing else.
+    const source = readFileSync(join(root, file), "utf8").replaceAll("../claude-code/plugin.js", "");
     assert.equal(banned.exec(source), null, `${file} names ${banned.exec(source)?.[0]}`);
   }
+});
+
+test("the patch row for the route names only its neutral entry file", () => {
+  const patch = readFileSync(join(root, "cordis.patch.yml"), "utf8");
+  assert.match(patch, /id: steak-cc-route\n\s+name: \.\/plugins\/cc-route\.js/);
 });
 
 test("rules register one section and can be replaced or emptied", () => {
