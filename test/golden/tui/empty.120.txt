@@ -1,0 +1,30 @@
+🥩  STEAK DSH                                                                       / commands · /new · /compact · /exit
+ /work/repo · session 5f2c9a10
+ Type a message and press enter. /help lists keys and commands.
+ enter send · ctrl+j newline · esc interrupt · ctrl+o tools · ctrl+c quit
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+◆ example-model-1 · high · ● new session ───────────────────────────────────────────────────────────────────── ◫ ?/131k
+╰─ Message

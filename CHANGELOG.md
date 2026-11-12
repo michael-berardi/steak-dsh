@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `steak-dsh tui`: a full-screen terminal UI close to the Steak Pi one. One long-lived `dsh --profile sdk` child over
+  JSON-RPC on stdio, the same overlay patches as `run` and `chat` (including `--long`). Header, transcript with
+  thinking blocks, tool cards (pending, success, error) and numbered coloured diffs, a status band (state, model,
+  effort, context meter, tokens, cache share), approval and question selectors that fail closed when the harness
+  dies, a multi-line editor with history, kill keys and bracketed paste, Esc to interrupt (stop, respawn, resume),
+  resize, `NO_COLOR` and a plain line mode on a pipe. Node built-ins only. Needs `--model`. Text arrives per committed
+  step (the SDK wire has no token stream); there is no cost figure; `--add-dir` has no effect on this wire.
+
 ## 0.2.1 - 2026-11-11
 
 Fixes to the one-step installers shipped in 0.2.0.

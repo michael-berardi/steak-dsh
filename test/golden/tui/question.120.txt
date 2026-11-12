@@ -1,0 +1,30 @@
+🥩  STEAK DSH                                                                       / commands · /new · /compact · /exit
+ Pick a plan.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─ Fixture ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Which fixture should the pane test use?
+  tiny · 3 panes
+› large · 40 panes
+  Other…
+ ↑↓ select · enter confirm · esc dismiss
+◆ example-model-1 · high · ◇ waiting · Fixture ─────────────────────────────────────────────────────────────── ◫ ?/131k
+╰─ Message

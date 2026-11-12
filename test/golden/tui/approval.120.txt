@@ -1,0 +1,30 @@
+🥩  STEAK DSH                                                                       / commands · /new · /compact · /exit
+ Install the formatter.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─ confirm · bash ──────────────────────────────────────────────────────────────────────────────────────────────────────
+ Run `npm install --save-dev formatter` in /work/repo
+› Allow once
+  Reject
+ ↑↓ select · enter confirm · y allow once · n/esc reject
+◆ example-model-1 · high · ◇ waiting · bash ────────────────────────────────────────────────────────────────── ◫ ?/131k
+╰─ Message

@@ -1,0 +1,30 @@
+🥩  STEAK DSH                               / commands · /new · /compact · /exit
+ 5: line 5 of the file
+ 6: line 6 of the file
+ 7: line 7 of the file
+ 8: line 8 of the file
+ 9: line 9 of the file
+ 10: line 10 of the file
+ ... (4 more lines, ctrl+o to expand)
+ ✓ edit src/pane.js
+ src/pane.js
+  40 function layout(w) {
+ -41   const gap = 1;
+ +41   const gap = 2;
+ +42   const pad = 1;
+  43   return w - gap;
+  44 }
+ ! bash npm test -- --grep pane
+ EXIT_NONZERO: 1 test failed: pane layout keeps the gap
+
+ Result
+
+ The gap is now 2 columns and layout() keeps a one column pad.
+
+ • the pane test still fails on the gap
+ • run npm test after adjusting the fixture
+
+ ╭ js
+ │ const gap = 2;
+◆ example-model-1 · high · ✓ complete ━───── ◫ 10%/131k · 23.6k tok · 78% cache
+╰─ Message

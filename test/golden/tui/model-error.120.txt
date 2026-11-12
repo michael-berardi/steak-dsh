@@ -1,0 +1,30 @@
+🥩  STEAK DSH                                                                       / commands · /new · /compact · /exit
+ Run it.
+
+ ! provider returned 429: rate limited
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+◆ example-model-1 · high · ! error · provider returned 429: rate limited ───────────────────────────────────── ◫ ?/131k
+╰─ Message

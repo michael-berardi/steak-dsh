@@ -161,12 +161,103 @@ steak-dsh run --model acme/coder-large --base-url https://gateway.example/v1 --a
   --key-env GATEWAY_KEY --effort high "fix the flaky retry test"
 
 steak-dsh chat --model deepseek-official/deepseek-flash      # line-based terminal chat
+steak-dsh tui --model deepseek-official/deepseek-flash       # full-screen terminal UI
 steak-dsh run --stock "same task on stock dsh"                # A/B against the unmodified harness
 steak-dsh run --long "a multi-step task"                      # long-work profile: delegation tools and the finish guard on
 steak-dsh run --json --owned-path "$PWD/src" --no-shell "..." # scripted use: NDJSON events, edits fenced to src/
 ```
 
 `steak-dsh --help` lists every flag. `--key-env` takes the name of an environment variable, never the key.
+
+## The terminal UI
+
+`steak-dsh tui` is a full-screen terminal UI that follows the layout and vocabulary of the Steak Pi companion: a one-line
+header, the transcript, a status band, and a multi-line editor. It takes the same options as `chat` (`--model`,
+`--long`, `--stock`, `--effort`, `--owned-path`, `--verify`, `--patch`, ...) and needs `--model`, because the SDK wire
+has to be told which model to run. It starts one long-lived `dsh --profile sdk` child with the same overlay files
+`run` and `chat` use, and talks to it over JSON-RPC on stdio. No dependency, no model built in.
+
+```sh
+steak-dsh tui --model acme/coder-large
+steak-dsh tui --model acme/coder-large --long --owned-path "$PWD/src"
+```
+
+Empty screen, captured from a real `dsh --profile sdk` (initialized, no prompt sent), 80 columns:
+
+```text
+🥩  STEAK DSH                               / commands · /new · /compact · /exit
+ ~/work/app · session 3e76d54a
+ Type a message and press enter. /help lists keys and commands.
+ enter send · ctrl+j newline · esc interrupt · ctrl+o tools · ctrl+c quit
+◆ deepseek-v4-flash · ● new session
+╰─ Message
+```
+
+A frame from a scripted session (the test suite feeds recorded event sequences through the same renderer; no model
+was called), 80 columns, 38 rows. Tool cards, a numbered diff, a failed tool, Markdown, and the status band with
+context meter, tokens and cache share:
+
+```text
+🥩  STEAK DSH                               / commands · /new · /compact · /exit
+ I'll read the pane first.
+
+ ✓ read src/pane.js
+ 1: line 1 of the file
+ 2: line 2 of the file
+ 3: line 3 of the file
+ 4: line 4 of the file
+ 5: line 5 of the file
+ 6: line 6 of the file
+ 7: line 7 of the file
+ 8: line 8 of the file
+ 9: line 9 of the file
+ 10: line 10 of the file
+ ... (4 more lines, ctrl+o to expand)
+ ✓ edit src/pane.js
+ src/pane.js
+  40 function layout(w) {
+ -41   const gap = 1;
+ +41   const gap = 2;
+ +42   const pad = 1;
+  43   return w - gap;
+  44 }
+ ! bash npm test -- --grep pane
+ EXIT_NONZERO: 1 test failed: pane layout keeps the gap
+
+ Result
+
+ The gap is now 2 columns and layout() keeps a one column pad.
+
+ • the pane test still fails on the gap
+ • run npm test after adjusting the fixture
+
+ ╭ js
+ │ const gap = 2;
+◆ example-model-1 · high · ✓ complete ━───── ◫ 10%/131k · 23.6k tok · 78% cache
+╰─ Message
+```
+
+The band reads `◆ model · effort · state`, then a context meter and `◫ percent/window · tokens · cache share`. An
+atom with no data is left out rather than guessed: there is no cost figure, because the harness reports tokens, not
+money. States: `● ready`, `◆ thinking`, `◆ responding`, `◆ tool <name>`, `◇ waiting · <what>`, `◆ compacting`,
+`✓ complete`, `! error · <why>`, `! stopped · <why>`.
+
+Keys: Enter sends; Ctrl-J, Alt-Enter or a trailing `\` then Enter adds a line; Up/Down browse history at the edges;
+Ctrl-A/E/B/F, Alt-B/F, Ctrl-W, Ctrl-U, Ctrl-K, Ctrl-Y edit; holding Backspace for 1.5 s clears the input;
+PageUp/PageDown scroll; Ctrl-O expands tool output; Ctrl-T shows or hides thinking; Esc interrupts the turn; Ctrl-C
+interrupts, then clears the editor, then quits; Ctrl-D quits on an empty editor. Pasted text (bracketed paste) is
+inserted as typed text and never sent or interpreted. `/new`, `/resume <id>` and `/exit` are local; any other
+`/command` goes to the harness (for example `/compact`).
+
+Approvals and questions from the harness open a selector above the band; Esc or `n` rejects. If the harness dies, every
+open approval and question is dropped and nothing is allowed. Esc cancels a turn by stopping the child, starting a new
+one and resuming the same session (the SDK wire has no cancel call), which takes a few seconds.
+
+What it cannot match: text arrives per committed step, not token by token (the SDK wire carries committed messages
+only); the editor is keyboard-only (no IME placement, mouse or autocomplete); Markdown is minimal and code is not
+syntax-highlighted; there is no cost figure; `--add-dir` has no effect over the SDK wire; the model is fixed for the
+process. `NO_COLOR`, a dumb terminal, or a pipe turns colour off; on a pipe `tui` runs in plain line mode (each stdin
+line is a message, approvals are refused).
 
 ## Benchmark
 
@@ -266,6 +357,6 @@ Plugins run inside the `dsh` process. Owned paths gate the file-editing tools, n
 ## Development
 
 ```sh
-npm test                    # 49 tests, Node built-ins only
+npm test                    # 137 tests, Node built-ins only
 python3 benchmarks/selftest.py   # 20 tasks: check fails untouched, passes on the reference solution
 ```
