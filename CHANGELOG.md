@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2 - 2026-11-12
+
+Fixes to `steak-dsh tui` on a real harness.
+
+- Tool cards showed `✓ undefined` with no arguments, output or diff, and the status band never showed context,
+  tokens or cache share. The SDK wire wraps each event's fields in `data`; the UI read them from the top level, which
+  only the scripted test sessions used. Both shapes are now read the same way, and a test replays the recorded
+  wire shape.
+- File paths inside the working directory are shown relative to it in tool cards and diff headers
+  (`src/slug.js`, not the full absolute path). Paths outside it are unchanged.
+
 ## 0.3.1 - 2026-11-12
 
 Fixes to the one-step installers.

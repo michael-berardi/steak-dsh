@@ -9,6 +9,7 @@ import { diffLines, enrichMeta, locateHunks, renderHunk, wordDiff } from "../lib
 import { JsonRpcClient } from "../lib/tui/rpc.js";
 import { initialState, reduce, statusPresentation } from "../lib/tui/state.js";
 import { createTheme, detectColorMode, rgbTo256 } from "../lib/tui/theme.js";
+import { displayPath, renderTranscript } from "../lib/tui/transcript.js";
 import { clipAnsi, fitLine, fitSides, formatTokens, graphemeWidth, stripAnsi, truncatePlain, visibleWidth, wrapPlain } from "../lib/tui/width.js";
 import { PassThrough } from "node:stream";
 
@@ -301,6 +302,40 @@ test("reducer: parallel tools are tracked by call id; a failed tool is an error 
   s = reduce(s, ev({ type: "turn/end", reason: { kind: "completed" } }));
   assert.equal(s.phase, "complete");
   assert.equal(s.blocks[0].args.path, "a");
+});
+
+test("reducer: the SDK wire shape (fields wrapped in data) reads the same as the flat shape", () => {
+  // Recorded from dsh 0.2.2-rc.1 --profile sdk: { type, seq, time, data: { ... } }.
+  const wire = (event) => ({ type: "notification", method: "session.event", params: { sessionId: "A", event } });
+  let s = initialState({ sessionId: "A", cwd: "/work/repo" });
+  s = reduce(s, wire({ type: "turn/start", seq: 4, time: 1, data: { turn: 1 } }));
+  s = reduce(s, wire({ type: "request/context", seq: 5, time: 1, data: { provider: "gw", model: "m", contextWindow: 4000 } }));
+  s = reduce(s, wire({ type: "tool/call", seq: 6, time: 1, data: { turn: 1, step: 1, callId: "c1", name: "edit", arguments: "{\"file_path\":\"/work/repo/src/a.js\"}" } }));
+  assert.equal(statusPresentation(s).text, "◆ tool edit");
+  s = reduce(s, wire({ type: "tool/result", seq: 7, time: 1, data: { turn: 1, step: 1, message: { toolCallId: "c1", isError: false, content: [{ type: "text", text: "ok" }] }, meta: { diffs: [{ path: "/work/repo/src/a.js", oldText: "a", newText: "b" }] } }, surfaceOp: "append" }));
+  s = reduce(s, wire({ type: "assistant/message", seq: 8, time: 1, data: { turn: 1, step: 2, message: { role: "assistant", content: [{ type: "text", text: "Done." }] }, usage: { inputTokens: 300, outputTokens: 100, cacheReadTokens: 600 } } }));
+  s = reduce(s, wire({ type: "turn/end", seq: 9, time: 1, data: { turn: 1, reason: { kind: "completed" } } }));
+  assert.equal(s.phase, "complete");
+  assert.equal(s.contextWindow, 4000);
+  assert.equal(s.contextTokens, 1000);
+  assert.deepEqual(s.blocks.map((b) => [b.kind, b.name ?? b.text, b.status]), [["tool", "edit", "success"], ["assistant", "Done.", undefined]]);
+  assert.equal(s.blocks[0].meta.diffs.length, 1);
+  const lines = renderTranscript(s, 60, createTheme({ mode: "none" })).map((l) => l.trimEnd());
+  assert.equal(lines[0], " ✓ edit src/a.js", "the tool is named and its path is shown relative to the working directory");
+  assert.equal(lines[1], " src/a.js (line numbers relative to the hunk)");
+  assert.ok(!lines.join("\n").includes("undefined"));
+  // A wire error is read from data too.
+  let e = reduce(initialState({ sessionId: "A" }), wire({ type: "turn/end", seq: 1, time: 1, data: { turn: 1, reason: { kind: "error", error: { message: "boom" } } } }));
+  assert.equal(e.phase, "error");
+});
+
+test("paths: only a path inside the working directory is shortened", () => {
+  assert.equal(displayPath("/work/repo/src/a.js", "/work/repo"), "src/a.js");
+  assert.equal(displayPath("/work/repo/src/a.js", "/work/repo/"), "src/a.js");
+  assert.equal(displayPath("/work/repo-other/a.js", "/work/repo"), "/work/repo-other/a.js");
+  assert.equal(displayPath("/etc/hosts", "/work/repo"), "/etc/hosts");
+  assert.equal(displayPath("src/a.js", "/work/repo"), "src/a.js");
+  assert.equal(displayPath("/work/repo/a.js", ""), "/work/repo/a.js");
 });
 
 // ---- markdown / diff ---------------------------------------------------------------------------------------
