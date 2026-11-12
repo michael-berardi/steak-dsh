@@ -11,9 +11,18 @@ OUT="${1:-dist/release}"
 commit=$(git rev-parse HEAD)
 rm -rf "$OUT"; mkdir -p "$OUT"
 stage=$(mktemp -d "${TMPDIR:-/tmp}/steak-dsh-build.XXXXXX"); trap 'rm -rf "$stage"' EXIT
-# Exactly what npm would ship: the "files" list in package.json, plus package.json itself.
-git archive --format=tar HEAD -- package.json plugins bin lib cordis.patch.yml README.md CHANGELOG.md LICENSE | tar -x -C "$stage"
-[ -f "$stage/package.json" ] && [ -f "$stage/cordis.patch.yml" ] || { echo "build-release: the shipped files are missing from HEAD" >&2; exit 1; }
+# Exactly what npm would ship: the "files" list in package.json, plus package.json itself. The list is read from
+# package.json so a newly shipped file (0.2.0 added long.patch.yml) can never be left out of the archive.
+command -v node >/dev/null 2>&1 || { echo "build-release: needs node to read the files list from package.json" >&2; exit 1; }
+node -e 'const f = require("./package.json").files; if (!Array.isArray(f) || f.length === 0) process.exit(1); process.stdout.write(f.join("\n") + "\n")' > "$stage.files" \
+  || { echo "build-release: package.json has no files list" >&2; exit 1; }
+set -- package.json
+while IFS= read -r entry; do set -- "$@" "$entry"; done < "$stage.files"
+rm -f "$stage.files"
+git archive --format=tar HEAD -- "$@" | tar -x -C "$stage" || { echo "build-release: a path in the package.json files list is not committed" >&2; exit 1; }
+for entry in "$@"; do
+  [ -e "$stage/$entry" ] || { echo "build-release: $entry is in the package.json files list but missing from HEAD" >&2; exit 1; }
+done
 # Deterministic: sorted names, fixed owner and times.
 ( cd "$stage" && find . -mindepth 1 | LC_ALL=C sort | sed 's|^\./||' > "$stage.list" )
 if tar --version 2>/dev/null | grep -qi gnu; then
