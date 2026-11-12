@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-11-11
 
 - One-step installers: `install.sh` (macOS and Linux) and `install.ps1` (Windows, also runs under PowerShell 7 on
   Linux) download the release, check its SHA-256, bring Node 22 and DeepSeek Harness when missing, add the bundle
