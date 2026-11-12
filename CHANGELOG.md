@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-11-12
 
 - New model route `claude-code`: requests run through the official Claude Code command on your own subscription login,
   while dsh keeps the conversation, the tools and the approvals. A port of Steak Pi's Claude Code module to dsh's message
@@ -11,6 +11,10 @@
   request per harness turn, and an aborted request stops the whole process tree.
 - `steak-dsh run|chat|tui --model claude-code/<model>` works without `--base-url` or a key; `--stock` still leaves the
   bundle out and refuses that model.
+- Checked on one machine with Claude Code 2.1.322: an answer-only task and a file edit through the harness's own tools
+  both completed, with cache reads growing across steps. Not yet tested: Windows, other Claude Code versions, the
+  terminal UI on this route, long conversations, images (the route is text only), and the usage-credit guard against
+  the real service (it is tested against a scripted one).
 
 ## 0.3.3 - 2026-11-12
 
