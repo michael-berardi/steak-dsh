@@ -6,7 +6,16 @@
 # Usage: scripts/build-release.sh [out-dir]   (run from a clean checkout of the release tag)
 set -eu
 cd "$(dirname "$0")/.."
-OUT="${1:-dist/release}"
+OUT="${1-dist/release}"
+ROOT=$(pwd -P)
+# Refuse an output folder that would make `rm -rf` destroy more than a build: empty, `.`, `/`, the repository
+# root, or any folder that contains it.
+case "$OUT" in ""|.|./|/|..|../) echo "build-release: refusing to use '$OUT' as the output folder" >&2; exit 1 ;; esac
+if [ -d "$OUT" ]; then
+  out_abs=$(cd "$OUT" && pwd -P)
+  case "$ROOT/" in "$out_abs"/*) echo "build-release: refusing to use '$OUT' (the repository root or a folder above it) as the output folder" >&2; exit 1 ;; esac
+  [ "$out_abs" != "/" ] || { echo "build-release: refusing to use '/' as the output folder" >&2; exit 1; }
+fi
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "build-release: the working tree has changes; build from a clean checkout" >&2; exit 1; }
 commit=$(git rev-parse HEAD)
 rm -rf "$OUT"; mkdir -p "$OUT"
@@ -28,7 +37,8 @@ done
 if tar --version 2>/dev/null | grep -qi gnu; then
   tar -C "$stage" --owner=0 --group=0 --numeric-owner --mtime=@0 --no-recursion -czf "$OUT/steak-dsh.tar.gz" -T "$stage.list"
 else
-  COPYFILE_DISABLE=1 tar -C "$stage" --uid 0 --gid 0 --uname root --gname root --no-xattrs --no-recursion -czf "$OUT/steak-dsh.tar.gz" -T "$stage.list"
+  # bsdtar cannot leave the time out of the gzip header itself, so compress with `gzip -n`.
+  COPYFILE_DISABLE=1 tar -C "$stage" --uid 0 --gid 0 --uname root --gname root --no-xattrs --no-recursion -cf - -T "$stage.list" | gzip -n > "$OUT/steak-dsh.tar.gz"
 fi
 rm -f "$stage.list"
 cp scripts/install.sh scripts/install.ps1 "$OUT/"

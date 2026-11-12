@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1 - 2026-11-11
+
+Fixes to the one-step installers shipped in 0.2.0.
+
+- The installers no longer replace a `dsh` or `steak-dsh` file that they did not write. Their own shims now carry a
+  marker line; a file without it is left alone with a one-line note. Before, a `dsh` of your own in the install
+  `bin` folder was overwritten when that folder was not on PATH. Shims from 0.2.0 are still recognised and upgraded.
+- `install.sh`: a private Node that exists but does not run is now replaced instead of making every re-run fail; the
+  "added Steak DSH to it" line is printed only when adding to the dsh headless profile worked.
+- `install.ps1` (Windows): shims use paths relative to themselves, or the OEM code page for an absolute path, so a
+  profile folder with accented characters works; the release is unpacked straight into the install folder (a move
+  from the temp drive failed across drives); a relative or forward-slash `STEAK_DSH_HOME` no longer deletes the
+  release just installed; a broken `current` junction is replaced; npm is taken from PATH when no `npm.cmd` sits
+  beside `node.exe`; TLS 1.2 is enabled and the progress bar silenced on Windows PowerShell 5.1; the session's
+  error preference, variables and PATH are left as they were.
+- `scripts/build-release.sh` refuses an empty output folder, `.`, `/`, or the repository root, and compresses with
+  `gzip -n` on every platform.
+- The Windows installer was tested under PowerShell 7 on Linux and not yet on a Windows machine.
+
 ## 0.2.0 - 2026-11-11
 
 - One-step installers: `install.sh` (macOS and Linux) and `install.ps1` (Windows, also runs under PowerShell 7 on

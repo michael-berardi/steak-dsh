@@ -7,9 +7,24 @@
 # Environment: STEAK_DSH_HOME (default %LOCALAPPDATA%\steak-dsh), STEAK_DSH_BIN_DIR (default <home>\bin on Windows,
 # ~/.local/bin elsewhere), STEAK_DSH_VERSION (pin a release), STEAK_DSH_RELEASE_BASE (override the download base URL,
 # used by tests), STEAK_DSH_DSH_VERSION (the dsh version to install when missing, default 0.2.2-rc.1).
-$ErrorActionPreference = 'Stop'
-
+# Everything runs inside one function so nothing is left behind in your session (no variables, no changed
+# $ErrorActionPreference, no extra PATH entries); failures are thrown, never `exit`, so your shell stays open.
 function Install-SteakDsh {
+  $savedErrorPref = $ErrorActionPreference
+  $savedProgressPref = $ProgressPreference
+  $savedPath = $env:PATH
+  $savedEnv = @{}
+  foreach ($n in 'npm_config_update_notifier', 'npm_config_fund', 'npm_config_audit', 'COREPACK_ENABLE_DOWNLOAD_PROMPT', 'STEAK_DSH_DSH_BIN') {
+    $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n)
+  }
+  $ErrorActionPreference = 'Stop'
+  # Windows PowerShell 5.1: TLS 1.2 must be opted in for github.com, and the progress bar makes downloads very slow.
+  $ProgressPreference = 'SilentlyContinue'
+  if ($PSVersionTable.PSVersion.Major -lt 6) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  }
+  $shimMarker = 'steak-dsh installer shim'
+  $relTmp = $null
   $repo = 'michael-berardi/steak-dsh'
   $nodeMinMajor = 22
   $dshMin = '0.2.2-rc.1'
@@ -21,6 +36,9 @@ function Install-SteakDsh {
   $binDir = if ($env:STEAK_DSH_BIN_DIR) { $env:STEAK_DSH_BIN_DIR }
   elseif ($onWindows) { Join-Path $homeDir 'bin' }
   else { Join-Path $HOME '.local/bin' }
+  # Absolute, normalised paths (a relative or forward-slash override must not confuse the cleanup below).
+  $homeDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($homeDir)
+  $binDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($binDir)
   $base = if ($env:STEAK_DSH_RELEASE_BASE) { $env:STEAK_DSH_RELEASE_BASE }
   elseif ($env:STEAK_DSH_VERSION) { "https://github.com/$repo/releases/download/v$($env:STEAK_DSH_VERSION.TrimStart('v'))" }
   else { "https://github.com/$repo/releases/latest/download" }
@@ -49,6 +67,42 @@ function Install-SteakDsh {
     catch { throw "download failed: $Url ($($_.Exception.Message))" }
   }
 
+  # Write-Shim <path> <lines> <legacy-pattern>: never overwrites a file this installer did not write. Ours carry the
+  # marker line (<legacy-pattern> also recognises the shape of earlier releases). Returns $true when written.
+  function Write-Shim {
+    param([string]$Path, [string[]]$Lines, [string]$LegacyPattern = '', [switch]$Cmd)
+    if (Test-Path -LiteralPath $Path) {
+      $pattern = [regex]::Escape($shimMarker)
+      if ($LegacyPattern) { $pattern = "$pattern|$LegacyPattern" }
+      if (-not (Select-String -LiteralPath $Path -Pattern $pattern -Quiet -ErrorAction SilentlyContinue)) {
+        Write-Host "steak-dsh install: $Path is not a file this installer wrote; leaving it alone."
+        return $false
+      }
+    }
+    if ($Cmd) {
+      # cmd.exe reads .cmd files in the OEM code page: a non-ASCII profile path must survive, so never -Encoding Ascii.
+      $oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+      [IO.File]::WriteAllText($Path, (($Lines -join "`r`n") + "`r`n"), $oem)
+    } else {
+      [IO.File]::WriteAllText($Path, (($Lines -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
+      $r = Invoke-Tool -Exe 'chmod' -ToolArgs @('755', $Path)
+      if ($r.Code -ne 0) { throw "cannot make $Path executable" }
+    }
+    return $true
+  }
+
+  # Get-CmdPath <path>: how a .cmd shim names <path>. Inside Steak DSH's own folder (with the shim in <home>\bin) it is
+  # relative to the shim (%~dp0), so it survives any profile name; otherwise absolute.
+  function Get-CmdPath {
+    param([string]$Path)
+    $shimHome = Join-Path $homeDir 'bin'
+    $prefix = $homeDir.TrimEnd('\', '/') + '\'
+    if (($binDir -eq $shimHome) -and $Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+      return '%~dp0..\' + $Path.Substring($prefix.Length).Replace('/', '\')
+    }
+    return $Path
+  }
+
   # Assert-Checksum <file> <name> <sums-file>: the file's SHA-256 must equal the line for <name> in the sums file.
   function Assert-Checksum {
     param([string]$File, [string]$Name, [string]$SumsFile)
@@ -69,13 +123,13 @@ function Install-SteakDsh {
     return ($major -ge $nodeMinMajor)
   }
 
-  if (-not (Get-Command tar -ErrorAction SilentlyContinue)) {
-    throw 'needs tar (built into Windows 10 and later; on Linux install it with your package manager)'
-  }
-
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ('steak-dsh-install-' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $tmp | Out-Null
   try {
+    if (-not (Get-Command tar -ErrorAction SilentlyContinue)) {
+      throw 'needs tar (built into Windows 10 and later; on Linux install it with your package manager)'
+    }
+
     Write-Host 'Downloading Steak DSH...'
     Get-RemoteFile "$base/steak-dsh.tar.gz" (Join-Path $tmp 'steak-dsh.tar.gz')
     Get-RemoteFile "$base/SHA256SUMS" (Join-Path $tmp 'SHA256SUMS')
@@ -145,6 +199,11 @@ function Install-SteakDsh {
     $nodeDir = Split-Path $nodeExe -Parent
     $env:PATH = "$nodeDir$([IO.Path]::PathSeparator)$env:PATH"
     $npm = if ($onWindows) { Join-Path $nodeDir 'npm.cmd' } else { Join-Path $nodeDir 'npm' }
+    if (-not (Test-Path $npm)) {
+      # a Node without npm.cmd beside node.exe (some packagings): use the npm on PATH
+      $npmOnPath = Get-Command $(if ($onWindows) { 'npm.cmd' } else { 'npm' }) -ErrorAction SilentlyContinue
+      if ($npmOnPath) { $npm = $npmOnPath.Source }
+    }
     if (-not (Test-Path $npm)) { throw "npm was not found next to Node ($nodeExe); install npm, then run this again" }
 
     # ver_ge <version> <min>: semver >= with prerelease rules, checked with the Node we just resolved.
@@ -191,8 +250,7 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
         $cmdSibling = $found.Substring(0, $found.Length - 4) + '.cmd'
         if (Test-Path $cmdSibling) { $found = $cmdSibling }
       }
-      $ownShim = ((Join-Path $binDir 'dsh') -eq $found -or (Join-Path $binDir 'dsh.cmd') -eq $found) -and
-        (Select-String -Path $found -Pattern 'steak-dsh installer shim' -Quiet -ErrorAction SilentlyContinue)
+      $ownShim = [bool](Select-String -LiteralPath $found -Pattern $shimMarker -SimpleMatch -Quiet -ErrorAction SilentlyContinue)
       if ($ownShim) {
         # the shim an earlier run of this installer wrote: not the user's dsh, so the private copy is used
       } else {
@@ -253,40 +311,44 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
     $rel = Join-Path $app "release-$version"
     if (-not (Test-Path $rel)) {
       Write-Host "Installing Steak DSH $version..."
+      # Unpack straight into a staging folder beside its final place (Move-Item from %TEMP% fails across drives).
       $relTmp = "$rel.tmp"
       if (Test-Path $relTmp) { Remove-Item -Recurse -Force $relTmp }
-      Move-Item $src $relTmp
+      New-Item -ItemType Directory -Path $relTmp | Out-Null
+      $r = Invoke-Tool -Exe 'tar' -ToolArgs @('-xzf', (Join-Path $tmp 'steak-dsh.tar.gz'), '-C', $relTmp)
+      if ($r.Code -ne 0) { throw 'cannot unpack the download' }
       $r = Invoke-Tool -Exe $nodeExe -ToolArgs @((Join-Path $relTmp 'bin/steak-dsh'), '--version') -Capture
       if ($r.Code -ne 0) { Remove-Item -Recurse -Force $relTmp; throw "the new copy does not start: $($r.Output)" }
       if ($r.Output.Trim() -notlike "$version*") { Remove-Item -Recurse -Force $relTmp; throw "the new copy reports '$($r.Output)', not $version; nothing was changed" }
       Move-Item $relTmp $rel
+      $relTmp = $null
     } else {
       Write-Host "Steak DSH $version is already unpacked; relinking."
     }
     $current = Join-Path $app 'current'
-    if (Test-Path $current) { (Get-Item $current -Force).Delete() }
+    # Test-Path is false for a broken junction or link, so look the item up directly.
+    $oldCurrent = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+    if ($oldCurrent) { $oldCurrent.Delete() }
     if ($onWindows) { New-Item -ItemType Junction -Path $current -Target $rel | Out-Null }
     else { New-Item -ItemType SymbolicLink -Path $current -Target $rel | Out-Null }
-    Get-ChildItem $app -Directory | Where-Object { $_.Name -like 'release-*' -and $_.FullName -ne $rel -and -not $_.LinkType } |
+    Get-ChildItem $app -Directory | Where-Object { $_.Name -like 'release-*' -and $_.Name -ne "release-$version" -and -not $_.LinkType } |
       Remove-Item -Recurse -Force
 
-    # A dsh shim only when no dsh existed on PATH; an existing dsh is never shadowed.
-    $nodePathCmd = if ($nodePrivate) { "set `"PATH=$nodeDir;%PATH%`"" } else { $null }
+    # A dsh shim only when no dsh existed on PATH; an existing dsh is never shadowed, and a file we did not write
+    # is never replaced.
+    $nodePathCmd = if ($nodePrivate) { "set `"PATH=$(Get-CmdPath $nodeDir);%PATH%`"" } else { $null }
     $nodePathSh = if ($nodePrivate) { 'PATH="' + $nodeDir + ':$PATH"; export PATH' } else { '' }
     if (-not $hadDsh) {
       if ($onWindows) {
-        $lines = @('@echo off', 'rem steak-dsh installer shim: runs the dsh that Steak DSH installed. Delete this file to use another dsh.')
+        $lines = @('@echo off', "rem $shimMarker`: runs the dsh that Steak DSH installed. Delete this file to use another dsh.")
         if ($nodePathCmd) { $lines += $nodePathCmd }
-        $lines += "call `"$dshBin`" %*"
-        Set-Content -Path (Join-Path $binDir 'dsh.cmd') -Value $lines -Encoding ASCII
+        $lines += "call `"$(Get-CmdPath $dshBin)`" %*"
+        $null = Write-Shim -Path (Join-Path $binDir 'dsh.cmd') -Lines $lines -Cmd
       } else {
-        $lines = @('#!/bin/sh', '# steak-dsh installer shim: runs the dsh that Steak DSH installed. Delete this file to use another dsh.')
+        $lines = @('#!/bin/sh', "# $shimMarker`: runs the dsh that Steak DSH installed. Delete this file to use another dsh.")
         if ($nodePathSh) { $lines += $nodePathSh }
         $lines += "exec `"$dshBin`" `"`$@`""
-        $shim = Join-Path $binDir 'dsh'
-        Set-Content -Path $shim -Value $lines -Encoding ASCII
-        $r = Invoke-Tool -Exe 'chmod' -ToolArgs @('755', $shim)
-        if ($r.Code -ne 0) { throw "cannot make $shim executable" }
+        $null = Write-Shim -Path (Join-Path $binDir 'dsh') -Lines $lines
       }
     }
 
@@ -301,11 +363,9 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
       $pnpmDir = Join-Path $tmp 'pnpm-bin'
       New-Item -ItemType Directory -Path $pnpmDir | Out-Null
       if ($onWindows) {
-        Set-Content -Path (Join-Path $pnpmDir 'pnpm.cmd') -Value @('@echo off', 'corepack pnpm %*') -Encoding ASCII
+        $null = Write-Shim -Path (Join-Path $pnpmDir 'pnpm.cmd') -Lines @('@echo off', "rem $shimMarker", 'corepack pnpm %*') -Cmd
       } else {
-        $shim = Join-Path $pnpmDir 'pnpm'
-        Set-Content -Path $shim -Value @('#!/bin/sh', 'export COREPACK_ENABLE_DOWNLOAD_PROMPT=0', 'exec corepack pnpm "$@"') -Encoding ASCII
-        $null = Invoke-Tool -Exe 'chmod' -ToolArgs @('755', $shim)
+        $null = Write-Shim -Path (Join-Path $pnpmDir 'pnpm') -Lines @('#!/bin/sh', "# $shimMarker", 'export COREPACK_ENABLE_DOWNLOAD_PROMPT=0', 'exec corepack pnpm "$@"')
       }
     } else {
       Write-Host "pnpm not found; installing it privately into $(Join-Path $homeDir 'tools') for this step..."
@@ -313,43 +373,51 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
       if ($r.Code -ne 0) { Write-Host 'steak-dsh install: warning: npm could not install pnpm (network or registry problem)' }
       $pnpmDir = Join-Path $homeDir 'tools/node_modules/.bin'
     }
-    $savedPath = $env:PATH
+    $pathBeforePnpm = $env:PATH
     if ($pnpmDir) { $env:PATH = "$pnpmDir$([IO.Path]::PathSeparator)$env:PATH" }
     $r = Invoke-Tool -Exe $dshBin -ToolArgs @('plugin', '--profile', 'headless', 'add', $current)
-    $env:PATH = $savedPath
-    if ($r.Code -eq 0) {
+    $env:PATH = $pathBeforePnpm
+    $profileOk = ($r.Code -eq 0)
+    if ($profileOk) {
       Write-Host 'Steak DSH added to the dsh headless profile.'
     } else {
       Write-Host 'steak-dsh install: warning: could not add the bundle to the dsh headless profile; the steak-dsh launcher works without it. Try again later with: steak-dsh install'
     }
 
     # `steak-dsh` on PATH: points at the dsh we resolved and, when fetched, at the private Node.
+    # Shims written by 0.2.0 carry no marker line but always name STEAK_DSH_DSH_BIN, which marks them as ours.
     if ($onWindows) {
-      $lines = @('@echo off', "if `"%STEAK_DSH_DSH_BIN%`"==`"`" set `"STEAK_DSH_DSH_BIN=$dshBin`"")
+      $lines = @('@echo off', "rem $shimMarker`: runs Steak DSH. Delete this file to remove the command.", "if `"%STEAK_DSH_DSH_BIN%`"==`"`" set `"STEAK_DSH_DSH_BIN=$(Get-CmdPath $dshBin)`"")
       if ($nodePathCmd) { $lines += $nodePathCmd }
-      $lines += "node `"$current\bin\steak-dsh`" %*"
+      $lines += "node `"$(Get-CmdPath $current)\bin\steak-dsh`" %*"
       $shim = Join-Path $binDir 'steak-dsh.cmd'
-      Set-Content -Path $shim -Value $lines -Encoding ASCII
+      $shimWritten = Write-Shim -Path $shim -Lines $lines -LegacyPattern 'STEAK_DSH_DSH_BIN' -Cmd
       $doctorExe = 'cmd.exe'
       $doctorArgs = @('/c', $shim, 'doctor')
     } else {
-      $lines = @('#!/bin/sh', "STEAK_DSH_DSH_BIN=`"`${STEAK_DSH_DSH_BIN:-$dshBin}`"", 'export STEAK_DSH_DSH_BIN')
+      $lines = @('#!/bin/sh', "# $shimMarker`: runs Steak DSH. Delete this file to remove the command.", "STEAK_DSH_DSH_BIN=`"`${STEAK_DSH_DSH_BIN:-$dshBin}`"", 'export STEAK_DSH_DSH_BIN')
       if ($nodePathSh) { $lines += $nodePathSh }
       $lines += "exec `"$current/bin/steak-dsh`" `"`$@`""
       $shim = Join-Path $binDir 'steak-dsh'
-      Set-Content -Path $shim -Value $lines -Encoding ASCII
-      $r = Invoke-Tool -Exe 'chmod' -ToolArgs @('755', $shim)
-      if ($r.Code -ne 0) { throw "cannot make $shim executable" }
+      $shimWritten = Write-Shim -Path $shim -Lines $lines -LegacyPattern 'STEAK_DSH_DSH_BIN'
       $doctorExe = $shim
       $doctorArgs = @('doctor')
+    }
+    if (-not $shimWritten) {
+      # not our file: check the install through the launcher directly
+      $env:STEAK_DSH_DSH_BIN = $dshBin
+      $doctorExe = $nodeExe
+      $doctorArgs = @((Join-Path $current 'bin/steak-dsh'), 'doctor')
     }
     Write-Host 'Checking the installation (steak-dsh doctor)...'
     $doctor = Invoke-Tool -Exe $doctorExe -ToolArgs $doctorArgs
     if ($doctor.Code -ne 0) { throw 'steak-dsh doctor failed; see its output above' }
 
-    if ($hadDsh -and $dshBin -eq $hadDsh) { Write-Host 'dsh was already installed: added Steak DSH to it' }
+    if (-not $profileOk) { Write-Host 'Steak DSH is installed, but it is not in the dsh headless profile yet (see the warning above).' }
+    elseif ($hadDsh -and $dshBin -eq $hadDsh) { Write-Host 'dsh was already installed: added Steak DSH to it' }
     else { Write-Host 'installed DeepSeek Harness and Steak DSH' }
-    Write-Host "Steak DSH $version installed ($(Join-Path $binDir 'steak-dsh'))."
+    if ($shimWritten) { Write-Host "Steak DSH $version installed ($(Join-Path $binDir 'steak-dsh'))." }
+    else { Write-Host "Steak DSH $version installed; the launcher is $(Join-Path $current 'bin/steak-dsh')." }
     if ($onWindows) {
       $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
       if (-not (($userPath -split ';') -contains $binDir)) {
@@ -365,6 +433,11 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
     Write-Host 'Next: steak-dsh run "fix the failing test in src/parser"'
   } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    if ($relTmp) { Remove-Item -Recurse -Force $relTmp -ErrorAction SilentlyContinue }
+    $env:PATH = $savedPath
+    foreach ($n in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) }
+    $ProgressPreference = $savedProgressPref
+    $ErrorActionPreference = $savedErrorPref
   }
 }
 

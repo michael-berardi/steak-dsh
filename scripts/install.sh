@@ -22,6 +22,7 @@ if [ -n "${STEAK_DSH_RELEASE_BASE:-}" ]; then BASE="$STEAK_DSH_RELEASE_BASE"
 elif [ -n "${STEAK_DSH_VERSION:-}" ]; then BASE="https://github.com/$REPO/releases/download/v${STEAK_DSH_VERSION#v}"
 else BASE="https://github.com/$REPO/releases/latest/download"; fi
 
+SHIM_MARK='steak-dsh installer shim'
 say() { printf '%s\n' "$*"; }
 die() { printf 'steak-dsh install: %s\n' "$*" >&2; exit 1; }
 
@@ -84,11 +85,10 @@ else
   fetch "$nbase/$nname" "$TMP/$nname"
   expect "$TMP/$nname" "$nname" "$TMP/NODESUMS"
   mkdir -p "$HOME_DIR"
-  if [ ! -x "$HOME_DIR/node/bin/node" ]; then
-    rm -rf "$HOME_DIR/node.tmp"; mkdir "$HOME_DIR/node.tmp"
-    tar -xzf "$TMP/$nname" -C "$HOME_DIR/node.tmp" --strip-components=1 || die "cannot unpack Node"
-    rm -rf "$HOME_DIR/node"; mv "$HOME_DIR/node.tmp" "$HOME_DIR/node"
-  fi
+  # A private Node that exists but did not pass node_ok above is broken or too old: replace it.
+  rm -rf "$HOME_DIR/node.tmp"; mkdir "$HOME_DIR/node.tmp"
+  tar -xzf "$TMP/$nname" -C "$HOME_DIR/node.tmp" --strip-components=1 || die "cannot unpack Node"
+  rm -rf "$HOME_DIR/node"; mv "$HOME_DIR/node.tmp" "$HOME_DIR/node"
   NODE_BIN="$HOME_DIR/node/bin/node"; NODE_PRIVATE=1
   node_ok "$NODE_BIN" || die "the downloaded Node does not run on this machine"
 fi
@@ -129,7 +129,7 @@ HAD_DSH=""
 DSH_BIN=""
 if command -v dsh >/dev/null 2>&1; then
   found=$(command -v dsh)
-  if [ "$found" = "$BIN_DIR/dsh" ] && grep -q 'steak-dsh installer shim' "$found" 2>/dev/null; then
+  if grep -q "$SHIM_MARK" "$found" 2>/dev/null; then
     : # the shim an earlier run of this installer wrote: not the user's dsh, so the private copy is used
   else
     HAD_DSH=$found
@@ -198,8 +198,17 @@ done
 NODE_PATH_LINE=""
 [ -z "$NODE_PRIVATE" ] || NODE_PATH_LINE="PATH=\"$(dirname "$NODE_BIN"):\$PATH\"; export PATH"
 
-# A dsh shim only when no dsh existed on PATH; an existing dsh is never shadowed.
-if [ -z "$HAD_DSH" ]; then
+# shim_ours <path> [legacy-pattern]: 0 when nothing is there or the file is one this installer wrote (marker line;
+# the legacy pattern also recognises the shape of earlier releases). Never replace a file the user put there.
+shim_ours() {
+  { [ ! -e "$1" ] && [ ! -L "$1" ]; } && return 0
+  grep -qE "$SHIM_MARK${2:+|$2}" "$1" 2>/dev/null && return 0
+  say "steak-dsh install: $1 is not a file this installer wrote; leaving it alone."
+  return 1
+}
+
+# A dsh shim only when no dsh existed on PATH; an existing dsh is never shadowed, and a file we did not write is kept.
+if [ -z "$HAD_DSH" ] && shim_ours "$BIN_DIR/dsh"; then
   cat > "$BIN_DIR/dsh.tmp.$$" <<DSHWRAP
 #!/bin/sh
 # steak-dsh installer shim: runs the dsh that Steak DSH installed. Delete this file to use another dsh.
@@ -212,6 +221,7 @@ fi
 # Add the bundle to the dsh headless profile. dsh needs pnpm for this; bring it privately when missing.
 say "Adding Steak DSH to the dsh headless profile..."
 PNPM_DIR=""
+PROFILE_OK=""
 if command -v pnpm >/dev/null 2>&1; then
   :
 elif command -v corepack >/dev/null 2>&1 && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm --version >/dev/null 2>&1 </dev/null; then
@@ -228,29 +238,40 @@ else
 fi
 if PATH="${PNPM_DIR:+$PNPM_DIR:}$PATH" "$DSH_BIN" plugin --profile headless add "$APP/current" </dev/null; then
   say "Steak DSH added to the dsh headless profile."
+  PROFILE_OK=1
 else
   say "steak-dsh install: warning: could not add the bundle to the dsh headless profile; the steak-dsh launcher works without it. Try again later with: steak-dsh install"
 fi
 
 # `steak-dsh` on PATH: points at the dsh we resolved and, when fetched, at the private Node.
+# Shims written by 0.2.0 carry no marker line but always name STEAK_DSH_DSH_BIN, which marks them as ours.
+LAUNCHER="$BIN_DIR/steak-dsh"
+if shim_ours "$LAUNCHER" 'STEAK_DSH_DSH_BIN'; then
 cat > "$BIN_DIR/steak-dsh.tmp.$$" <<WRAP
 #!/bin/sh
+# $SHIM_MARK: runs Steak DSH. Delete this file to remove the command.
 STEAK_DSH_DSH_BIN="\${STEAK_DSH_DSH_BIN:-$DSH_BIN}"
 export STEAK_DSH_DSH_BIN
 $NODE_PATH_LINE
 exec "$APP/current/bin/steak-dsh" "\$@"
 WRAP
 chmod 755 "$BIN_DIR/steak-dsh.tmp.$$"; mv -f "$BIN_DIR/steak-dsh.tmp.$$" "$BIN_DIR/steak-dsh"
+else
+  LAUNCHER="$APP/current/bin/steak-dsh"   # not our file: use the launcher inside the install folder
+fi
 
 say "Checking the installation (steak-dsh doctor)..."
-"$BIN_DIR/steak-dsh" doctor </dev/null || die "steak-dsh doctor failed; see its output above"
+if [ "$LAUNCHER" = "$BIN_DIR/steak-dsh" ]; then "$LAUNCHER" doctor </dev/null
+else STEAK_DSH_DSH_BIN="$DSH_BIN" "$LAUNCHER" doctor </dev/null; fi || die "steak-dsh doctor failed; see its output above"
 
-if [ "$DSH_BIN" = "$HAD_DSH" ] && [ -n "$HAD_DSH" ]; then
+if [ -z "$PROFILE_OK" ]; then
+  say "Steak DSH is installed, but it is not in the dsh headless profile yet (see the warning above)."
+elif [ "$DSH_BIN" = "$HAD_DSH" ] && [ -n "$HAD_DSH" ]; then
   say "dsh was already installed: added Steak DSH to it"
 else
   say "installed DeepSeek Harness and Steak DSH"
 fi
-say "Steak DSH $VERSION installed ($BIN_DIR/steak-dsh)."
+say "Steak DSH $VERSION installed ($LAUNCHER)."
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) say "Add $BIN_DIR to your PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;; esac
 say "Next: steak-dsh run \"fix the failing test in src/parser\""
 }

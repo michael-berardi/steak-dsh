@@ -245,6 +245,32 @@ DOCKERFILE
       if ($LASTEXITCODE -ne 0) { throw "steak-dsh shim broken after re-run" }
       & /usr/bin/env -i HOME=$HOME PATH=/usr/bin:/bin "$HOME/.local/bin/dsh" --version
       if ($LASTEXITCODE -ne 0) { throw "dsh shim broken after re-run" }
+      Write-Host "--- relative STEAK_DSH_HOME keeps the release just installed ---"
+      $saved = Get-Location
+      Set-Location /
+      $env:STEAK_DSH_HOME = "root/.steak-dsh/../.steak-dsh"
+      & /scripts/install.ps1
+      Set-Location $saved
+      Remove-Item Env:STEAK_DSH_HOME
+      if (-not (Get-ChildItem "$HOME/.steak-dsh/app" -Directory | Where-Object { $_.Name -like "release-*" })) { throw "relative HOME: the release just installed was deleted" }
+      & "$HOME/.local/bin/steak-dsh" --version
+      if ($LASTEXITCODE -ne 0) { throw "relative HOME: steak-dsh does not run" }
+      Write-Host "--- a dangling current link is replaced ---"
+      Remove-Item "$HOME/.steak-dsh/app/current" -Force
+      New-Item -ItemType SymbolicLink -Path "$HOME/.steak-dsh/app/current" -Target "/nonexistent-steak-dsh" | Out-Null
+      & /scripts/install.ps1
+      & "$HOME/.local/bin/steak-dsh" --version
+      if ($LASTEXITCODE -ne 0) { throw "dangling link: steak-dsh does not run" }
+      Write-Host "--- a user file in BIN_DIR is never overwritten ---"
+      $ub = "$HOME/user-bin"
+      New-Item -ItemType Directory -Path $ub | Out-Null
+      Set-Content -Path "$ub/steak-dsh" -Value "#!/bin/sh"
+      Set-Content -Path "$ub/dsh" -Value "#!/bin/sh"
+      $env:STEAK_DSH_BIN_DIR = $ub
+      & /scripts/install.ps1
+      Remove-Item Env:STEAK_DSH_BIN_DIR
+      if ((Get-Content "$ub/steak-dsh") -ne "#!/bin/sh" -or (Get-Content "$ub/dsh") -ne "#!/bin/sh") { throw "a user file was overwritten" }
+      if ($ErrorActionPreference -ne "Stop") { throw "the installer changed the session ErrorActionPreference" }
       Write-Host "--- corrupted archive ---"
       $env:STEAK_DSH_RELEASE_BASE = "'"${DOCKER_BASE}"'/bad"
       $env:STEAK_DSH_HOME = "$HOME/bad-home"
@@ -254,6 +280,7 @@ DOCKERFILE
     ' >"$WORK/logs/pwsh.log" 2>&1 || { tail -40 "$WORK/logs/pwsh.log"; fail "pwsh install.ps1"; }
   expect_ok "$WORK/logs/pwsh.log" "installed DeepSeek Harness and Steak DSH"
   expect_ok "$WORK/logs/pwsh.log" "refused: checksum mismatch"
+  expect_ok "$WORK/logs/pwsh.log" "leaving it alone"
   ! grep -q "already on PATH\|dsh was already installed" "$WORK/logs/pwsh.log" || fail "pwsh re-run took its own dsh shim for a user dsh"
   tail -6 "$WORK/logs/pwsh.log"
 
