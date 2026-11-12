@@ -14,7 +14,7 @@
  * ignoreSigint: true makes the child survive SIGINT (the controller must escalate).
  * Everything the child receives or answers is appended to FAKE_DSH_LOG as JSON lines.
  */
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -107,6 +107,11 @@ export function makeFakeDsh(scenario = {}) {
   const bin = join(dir, "dsh");
   writeFileSync(bin, FAKE);
   chmodSync(bin, 0o755);
+  // The fake is an extensionless CommonJS script. Node reads its module type from the nearest package.json, so a
+  // temp folder inside this repository (TMPDIR set by scripts/test-install.sh) would load it as an ES module and
+  // fail on `require`. Its own package.json makes it CommonJS wherever the temp folder is.
+  writeFileSync(join(dir, "package.json"), '{"type":"commonjs"}\n');
+  process.once("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
   const scenarioPath = join(dir, "scenario.json");
   const logPath = join(dir, "log.jsonl");
   writeFileSync(scenarioPath, JSON.stringify(scenario));
