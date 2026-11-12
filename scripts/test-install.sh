@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 WORK="$ROOT/.scratch/install-tests"
-PORT="${STEAK_DSH_TEST_PORT:-18473}"
+PORT="${STEAK_DSH_TEST_PORT:-18637}"
 BASE="http://127.0.0.1:$PORT"
 DOCKER_BASE="http://host.docker.internal:$PORT"
 SKIP=",${STEAK_DSH_TEST_SKIP:-},"
@@ -18,6 +18,22 @@ SERVER_PID=""
 
 say() { printf '\n=== %s ===\n' "$*"; }
 fail() { printf 'TEST FAILED: %s\n' "$*" >&2; exit 1; }
+
+# port_busy <port>: exit 0 when something already accepts connections on 127.0.0.1:<port>.
+port_busy() {
+  python3 - "$1" <<'PY'
+import socket, sys
+s = socket.socket()
+try:
+    s.settimeout(1)
+    s.connect(("127.0.0.1", int(sys.argv[1])))
+    sys.exit(0)
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
 
 cleanup() {
   if [ -n "$SERVER_PID" ]; then
@@ -61,10 +77,16 @@ cp dist/release/* "$WORK/serve/good/"
 cp dist/release/* "$WORK/serve/bad/"
 printf 'corrupted' >> "$WORK/serve/bad/steak-dsh.tar.gz"   # checksums no longer match
 
+port_busy "$PORT" && fail "port $PORT is already in use by another process; pick a free one with STEAK_DSH_TEST_PORT=<port>"
 python3 -m http.server "$PORT" --bind 0.0.0.0 --directory "$WORK/serve" >"$WORK/logs/server.log" 2>&1 &
 SERVER_PID=$!
-sleep 1
-curl -fsS "$BASE/good/SHA256SUMS" >/dev/null || fail "release server did not start on port $PORT"
+up=0
+for _ in $(seq 1 40); do
+  kill -0 "$SERVER_PID" 2>/dev/null || fail "release server exited at start (see $WORK/logs/server.log)"
+  if curl -fsS "$BASE/good/SHA256SUMS" >/dev/null 2>&1; then up=1; break; fi
+  sleep 0.25
+done
+[ "$up" = 1 ] || fail "release server did not answer on port $PORT"
 
 # Shared npm cache (also warm from earlier runs) keeps the dsh installs quick; it stays in the worktree.
 
