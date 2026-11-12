@@ -79,7 +79,7 @@ function Install-SteakDsh {
     Write-Host 'Downloading Steak DSH...'
     Get-RemoteFile "$base/steak-dsh.tar.gz" (Join-Path $tmp 'steak-dsh.tar.gz')
     Get-RemoteFile "$base/SHA256SUMS" (Join-Path $tmp 'SHA256SUMS')
-    Assert-Checksum (Join-Path $tmp 'steak-dsh.tar.gz') 'steak-dsh.tar.gz' (Join-Path $tmp 'SHA256SUMS')
+    Assert-Checksum -File (Join-Path $tmp 'steak-dsh.tar.gz') -Name 'steak-dsh.tar.gz' -SumsFile (Join-Path $tmp 'SHA256SUMS')
     $src = Join-Path $tmp 'src'
     New-Item -ItemType Directory -Path $src | Out-Null
     $r = Invoke-Tool -Exe 'tar' -ToolArgs @('-xzf', (Join-Path $tmp 'steak-dsh.tar.gz'), '-C', $src)
@@ -120,7 +120,7 @@ function Install-SteakDsh {
         Where-Object { $_ -like "*-$os-$arch.$ext" } | Select-Object -First 1
       if (-not $nname) { throw "no official Node build for $os-$arch" }
       Get-RemoteFile "$nbase/$nname" (Join-Path $tmp $nname)
-      Assert-Checksum (Join-Path $tmp $nname) $nname (Join-Path $tmp 'NODESUMS')
+      Assert-Checksum -File (Join-Path $tmp $nname) -Name $nname -SumsFile (Join-Path $tmp 'NODESUMS')
       New-Item -ItemType Directory -Path $homeDir -Force | Out-Null
       $nodeDir = Join-Path $homeDir 'node'
       $nodeTmp = Join-Path $homeDir 'node.tmp'
