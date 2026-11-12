@@ -128,13 +128,18 @@ ver_ge() { "$NODE_BIN" "$TMP/ver_ge.js" "$1" "$2" >/dev/null 2>&1; }
 HAD_DSH=""
 DSH_BIN=""
 if command -v dsh >/dev/null 2>&1; then
-  HAD_DSH=$(command -v dsh)
-  dshv=$("$HAD_DSH" --version 2>/dev/null </dev/null | head -n 1) || dshv=""
-  if [ -n "$dshv" ] && ver_ge "$dshv" "$DSH_MIN"; then
-    DSH_BIN=$HAD_DSH
-    say "Using the dsh already on PATH: $DSH_BIN ($dshv)."
+  found=$(command -v dsh)
+  if [ "$found" = "$BIN_DIR/dsh" ] && grep -q 'steak-dsh installer shim' "$found" 2>/dev/null; then
+    : # the shim an earlier run of this installer wrote: not the user's dsh, so the private copy is used
   else
-    say "The dsh on PATH ($HAD_DSH) does not run or is older than $DSH_MIN; installing a private copy."
+    HAD_DSH=$found
+    dshv=$("$HAD_DSH" --version 2>/dev/null </dev/null | head -n 1) || dshv=""
+    if [ -n "$dshv" ] && ver_ge "$dshv" "$DSH_MIN"; then
+      DSH_BIN=$HAD_DSH
+      say "Using the dsh already on PATH: $DSH_BIN ($dshv)."
+    else
+      say "The dsh on PATH ($HAD_DSH) does not run or is older than $DSH_MIN; installing a private copy."
+    fi
   fi
 fi
 PRIV_DSH="$HOME_DIR/dsh/node_modules/.bin/dsh"
@@ -197,6 +202,7 @@ NODE_PATH_LINE=""
 if [ -z "$HAD_DSH" ]; then
   cat > "$BIN_DIR/dsh.tmp.$$" <<DSHWRAP
 #!/bin/sh
+# steak-dsh installer shim: runs the dsh that Steak DSH installed. Delete this file to use another dsh.
 $NODE_PATH_LINE
 exec "$DSH_BIN" "\$@"
 DSHWRAP

@@ -114,6 +114,7 @@ if [ "$(uname -s)" = Darwin ] && [[ "$SKIP" != *,mac,* ]]; then
     STEAK_DSH_HOME="$H/home/.steak-dsh" STEAK_DSH_BIN_DIR="$H/bin" \
     sh scripts/install.sh >"$WORK/logs/mac-rerun.log" 2>&1 || { tail -30 "$WORK/logs/mac-rerun.log"; fail "macOS re-run"; }
   expect_ok "$WORK/logs/mac-rerun.log" "already unpacked; relinking"
+  ! grep -q "already on PATH\|dsh was already installed" "$WORK/logs/mac-rerun.log" || fail "macOS re-run took its own dsh shim for a user dsh"
   got=$(PATH="/usr/bin:/bin" "$H/bin/steak-dsh" --version)
   [ "$got" = "$VERSION" ] || fail "macOS re-run: version '$got' != $VERSION"
 
@@ -177,6 +178,7 @@ if [[ "$SKIP" != *,linux,* ]]; then
     ' >"$WORK/logs/linux-a.log" 2>&1 || { tail -40 "$WORK/logs/linux-a.log"; fail "Linux branch A"; }
   expect_ok "$WORK/logs/linux-a.log" "installed DeepSeek Harness and Steak DSH"
   expect_ok "$WORK/logs/linux-a.log" "checksum mismatch"
+  ! grep -q "already on PATH\|dsh was already installed" "$WORK/logs/linux-a.log" || fail "Linux re-run took its own dsh shim for a user dsh"
   expect_ok "$WORK/logs/linux-a.log" "needs curl or wget"
   expect_ok "$WORK/logs/linux-a.log" "LINUX-A-OK"
   tail -6 "$WORK/logs/linux-a.log"
@@ -252,6 +254,7 @@ DOCKERFILE
     ' >"$WORK/logs/pwsh.log" 2>&1 || { tail -40 "$WORK/logs/pwsh.log"; fail "pwsh install.ps1"; }
   expect_ok "$WORK/logs/pwsh.log" "installed DeepSeek Harness and Steak DSH"
   expect_ok "$WORK/logs/pwsh.log" "refused: checksum mismatch"
+  ! grep -q "already on PATH\|dsh was already installed" "$WORK/logs/pwsh.log" || fail "pwsh re-run took its own dsh shim for a user dsh"
   tail -6 "$WORK/logs/pwsh.log"
 
   say "pwsh: PSScriptAnalyzer (skipped when it does not install quickly)"

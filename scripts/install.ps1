@@ -186,18 +186,25 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
     $dshBin = $null
     $systemDsh = Get-Command dsh -ErrorAction SilentlyContinue
     if ($systemDsh) {
-      $hadDsh = $systemDsh.Source
-      if ($onWindows -and $hadDsh.EndsWith('.ps1')) {
-        $cmdSibling = $hadDsh.Substring(0, $hadDsh.Length - 4) + '.cmd'
-        if (Test-Path $cmdSibling) { $hadDsh = $cmdSibling }
+      $found = $systemDsh.Source
+      if ($onWindows -and $found.EndsWith('.ps1')) {
+        $cmdSibling = $found.Substring(0, $found.Length - 4) + '.cmd'
+        if (Test-Path $cmdSibling) { $found = $cmdSibling }
       }
-      $r = Invoke-Tool -Exe $hadDsh -ToolArgs @('--version') -Capture
-      $dshv = ($r.Output -split "`n")[0].Trim()
-      if ($r.Code -eq 0 -and (Test-VerGe $dshv $dshMin)) {
-        $dshBin = $hadDsh
-        Write-Host "Using the dsh already on PATH: $dshBin ($dshv)."
+      $ownShim = ((Join-Path $binDir 'dsh') -eq $found -or (Join-Path $binDir 'dsh.cmd') -eq $found) -and
+        (Select-String -Path $found -Pattern 'steak-dsh installer shim' -Quiet -ErrorAction SilentlyContinue)
+      if ($ownShim) {
+        # the shim an earlier run of this installer wrote: not the user's dsh, so the private copy is used
       } else {
-        Write-Host "The dsh on PATH ($hadDsh) does not run or is older than $dshMin; installing a private copy."
+        $hadDsh = $found
+        $r = Invoke-Tool -Exe $hadDsh -ToolArgs @('--version') -Capture
+        $dshv = ($r.Output -split "`n")[0].Trim()
+        if ($r.Code -eq 0 -and (Test-VerGe $dshv $dshMin)) {
+          $dshBin = $hadDsh
+          Write-Host "Using the dsh already on PATH: $dshBin ($dshv)."
+        } else {
+          Write-Host "The dsh on PATH ($hadDsh) does not run or is older than $dshMin; installing a private copy."
+        }
       }
     }
     $privDsh = if ($onWindows) { Join-Path $homeDir 'dsh\node_modules\.bin\dsh.cmd' } else { Join-Path $homeDir 'dsh/node_modules/.bin/dsh' }
@@ -268,12 +275,12 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
     $nodePathSh = if ($nodePrivate) { 'PATH="' + $nodeDir + ':$PATH"; export PATH' } else { '' }
     if (-not $hadDsh) {
       if ($onWindows) {
-        $lines = @('@echo off')
+        $lines = @('@echo off', 'rem steak-dsh installer shim: runs the dsh that Steak DSH installed. Delete this file to use another dsh.')
         if ($nodePathCmd) { $lines += $nodePathCmd }
         $lines += "call `"$dshBin`" %*"
         Set-Content -Path (Join-Path $binDir 'dsh.cmd') -Value $lines -Encoding ASCII
       } else {
-        $lines = @('#!/bin/sh')
+        $lines = @('#!/bin/sh', '# steak-dsh installer shim: runs the dsh that Steak DSH installed. Delete this file to use another dsh.')
         if ($nodePathSh) { $lines += $nodePathSh }
         $lines += "exec `"$dshBin`" `"`$@`""
         $shim = Join-Path $binDir 'dsh'
