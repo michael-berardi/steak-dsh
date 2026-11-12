@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- New model route `claude-code`: requests run through the official Claude Code command on your own subscription login,
+  while dsh keeps the conversation, the tools and the approvals. A port of Steak Pi's Claude Code module to dsh's message
+  and stream types, in `claude-code/` with its upstream licence notice. Models are discovered from the installed CLI; with
+  no CLI or no login the route offers none and a request fails with a named error. Inherited API-key, proxy, Bedrock,
+  Vertex and Foundry overrides are refused, a turn charged to usage credits fails with a non-retryable billing error
+  unless `STEAK_DSH_CLAUDE_CODE_ALLOW_USAGE_CREDITS=1`, Claude Code can ask for a tool but never run one, one upstream
+  request per harness turn, and an aborted request stops the whole process tree.
+- `steak-dsh run|chat|tui --model claude-code/<model>` works without `--base-url` or a key; `--stock` still leaves the
+  bundle out and refuses that model.
+
 ## 0.3.3 - 2026-11-12
 
 - The working rules (`plugins/rules.js`) gain one line asking the model to keep its reasoning short, pick the next step
