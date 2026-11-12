@@ -1,10 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 - 2026-11-12
 
 - The working rules (`plugins/rules.js`) gain one line asking the model to keep its reasoning short, pick the next step
-  and not narrate between tool calls. On the ParetoBench short set it cut output tokens and cost against 0.3.1.
-  No tool, plugin or safety row changed.
+  and not narrate between tool calls. Measured with ParetoBench on one model, paired, 95% intervals, every run correct
+  in every arm:
+  - 20 short tasks, 3 repeats: cost 0.83 times the 0.3.1 bundle (0.75 to 0.91) and 0.64 times stock `dsh`
+    (0.53 to 0.78).
+  - 11 long tasks, 3 repeats: cost 0.69 times stock `dsh` (0.63 to 0.77), 33 of 33 correct.
+  No tool, plugin or safety row changed. The `--long` profile inherits the line and was not benchmarked with it.
+  Tried and dropped, because no run showed a gain: removing the todo, skill, web, search and image tool schemas.
 
 ## 0.3.2 - 2026-11-12
 
