@@ -1,6 +1,6 @@
 {
   "name": "steak-dsh",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Steak DSH: a plugin bundle for DeepSeek Harness (dsh) with a finish guard, verify-after-edit, working rules and a leaner one-shot profile.",
   "license": "MIT",
   "author": "Pareto Cybernetics",
@@ -28,6 +28,7 @@
   "files": [
     "plugins",
     "claude-code",
+    "codex",
     "bin",
     "lib",
     "cordis.patch.yml",

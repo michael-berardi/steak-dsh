@@ -49,3 +49,11 @@
     - id: steak-cc-route
       name: ./plugins/cc-route.js
       config: {}
+    # A model route that sends requests to a hosted Responses endpoint on the login a coding CLI already keeps on this
+    # machine (see README). It reads nothing until a model is listed or requested; with no login it offers no models.
+    # Switch it off with
+    #   - id: steak-codex-route
+    #     disabled: true
+    - id: steak-codex-route
+      name: ./plugins/codex-route.js
+      config: {}
