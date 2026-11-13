@@ -16,17 +16,26 @@ export function offeredId(row) {
   return row.resolvedModel.replace(/\[1m\]$/u, "");
 }
 
-/** The CLI's catalog row, reduced to what the route uses. `native` is what the CLI itself calls the row. */
-export function normalizeRow(row) {
+/** The full model id a row stands for, for a lookup in the harness's model library. */
+export function libraryId(row) {
+  return String(row.resolvedModel || row.value || "").replace(/\[1m\]$/u, "");
+}
+
+/**
+ * The CLI's catalog row, reduced to what the route uses. `native` is what the CLI itself calls the row.
+ * `known` is the harness model library's row for the same model, when there is one. Context size: what the CLI
+ * states, else the library's, else 1M when the CLI's own text says so, else the small default.
+ */
+export function normalizeRow(row, known) {
+  const positive = (value) => (Number.isInteger(value) && value > 0 ? value : undefined);
   return {
     id: offeredId(row),
     native: row.value,
     name: row.displayName,
     description: row.description,
-    contextWindow: Number.isInteger(row.contextWindow) && row.contextWindow > 0
-      ? row.contextWindow
-      : (/\b1M context\b/iu.test(row.description ?? "") || /\[1m\]$/u.test(row.value) ? LARGE_CONTEXT : DEFAULT_CONTEXT),
-    maxTokens: Number.isInteger(row.maxTokens) && row.maxTokens > 0 ? row.maxTokens : undefined,
+    contextWindow: positive(row.contextWindow) ?? positive(known?.contextWindow)
+      ?? (/\b1M context\b/iu.test(row.description ?? "") || /\[1m\]$/u.test(row.value) ? LARGE_CONTEXT : DEFAULT_CONTEXT),
+    maxTokens: positive(row.maxTokens) ?? positive(known?.maxTokens),
     efforts: Array.isArray(row.supportedEffortLevels) ? row.supportedEffortLevels.filter((level) => typeof level === "string" && level) : [],
     adaptive: row.supportsAdaptiveThinking === true,
   };
@@ -60,11 +69,11 @@ export function plainModel(provider, id) {
 }
 
 /** Catalog rows to normalized rows, dropping anything without an id and repeats. */
-export function rowsFromDiscovery(discovered) {
+export function rowsFromDiscovery(discovered, lookup) {
   const seen = new Set();
   const rows = [];
   for (const raw of discovered) {
-    const row = normalizeRow(raw);
+    const row = normalizeRow(raw, lookup?.(libraryId(raw)));
     if (!row.id || seen.has(row.id)) continue;
     seen.add(row.id);
     rows.push(row);

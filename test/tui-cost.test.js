@@ -91,3 +91,22 @@ test("compact layout under 12 rows: header on the first row, cursor on the edito
   assert.equal(lines.at(-1), "╰─ Message");
   assert.equal(cursor.row, ROOMY_MIN_ROWS - 2);
 });
+
+test("a cost the route reports for a request is used as is, and shown even with no price", () => {
+  const reported = { type: "notification", method: "session.event", params: { sessionId: "s", event: { type: "assistant/message", turn: 1, step: 1, stream: [], usage: { ...usage, costUsd: 0.0125 }, message: { role: "assistant", content: [{ type: "text", text: "Hello." }] } } } };
+  const start = (price) => initialState({ model: "gateway/example-model-1", sessionId: "s", contextWindow: 131072, price });
+  const unpriced = reduce(reduce(start(undefined), reported), reported);
+  assert.ok(Math.abs(unpriced.usage.cost - 0.025) < 1e-12);
+  assert.match(band(unpriced), /\$0\.025$/);
+  // The reported figure wins over tokens times price.
+  assert.ok(Math.abs(reduce(start({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }), reported).usage.cost - 0.0125) < 1e-12);
+  assert.ok(Math.abs(reduce(start({ plan: true }), reported).usage.cost - 0.0125) < 1e-12);
+});
+
+test("resolvePrice: a login route is priced from the library row of the same model when there is one", async () => {
+  const seen = [];
+  const lookup = (provider, model) => { seen.push(provider); return model === "m" ? { cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 } } : undefined; };
+  assert.deepEqual(await resolvePrice({ provider: "claude-code", model: "m", lookup }), { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 });
+  assert.deepEqual(await resolvePrice({ provider: "claude-code", model: "unlisted", lookup }), { plan: true });
+  assert.notEqual(seen[0], "claude-code", "looked up under the library's own provider name");
+});

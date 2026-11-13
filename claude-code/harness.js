@@ -7,10 +7,41 @@
  * contract, because the adapter registry accepts any object that implements it.
  */
 import { createRequire } from "node:module";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PACKAGE = "@deepseek-ai/dsh-llm";
+const ROUTES = "@deepseek-ai/dsh-llm-pi-ai";
+const LIBRARY = "@earendil-works/pi-ai";
+/** The provider the harness's own model library files this vendor's models under. */
+const LIBRARY_PROVIDER = "anthropic";
+
+/**
+ * A lookup into the harness's own model library: (model id) -> its row (context size, output limit) or undefined.
+ * The CLI's model list states no context size, so without this every model was offered at the small default.
+ * Undefined when the library cannot be reached; the caller then keeps what the CLI said.
+ */
+async function loadLibraryLookup(entry) {
+  try {
+    const routes = createRequire(realpathSync(entry)).resolve(ROUTES);
+    const require = createRequire(routes);
+    for (const dir of require.resolve.paths(LIBRARY) ?? []) {
+      const root = join(dir, LIBRARY);
+      let manifest;
+      try { manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")); } catch { continue; }
+      const target = manifest.exports?.["./providers/*"];
+      const pattern = typeof target === "string" ? target : (target?.import ?? target?.default);
+      if (typeof pattern !== "string" || !pattern.includes("*")) return undefined;
+      const library = await import(pathToFileURL(join(root, pattern.replace("*", "all"))).href);
+      if (typeof library.getBuiltinModel !== "function") return undefined;
+      return (id) => { try { return library.getBuiltinModel(LIBRARY_PROVIDER, id); } catch { return undefined; } };
+    }
+  } catch {
+    // no library: the CLI's own rows stand
+  }
+  return undefined;
+}
 
 /** The adapter contract defaults, as the harness documents them in LlmAdapter. */
 class FallbackAdapter {
@@ -48,6 +79,7 @@ export async function loadHarness({ entry = process.argv[1] } = {}) {
         LlmError: mod.LlmError,
         ReasoningEffortId: typeof mod.ReasoningEffortId === "function" ? mod.ReasoningEffortId : (id) => id,
         ToolCallId: typeof mod.ToolCallId === "function" ? mod.ToolCallId : (id) => id,
+        libraryModel: await loadLibraryLookup(entry),
         source: "harness",
       };
     }

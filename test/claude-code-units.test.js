@@ -245,3 +245,23 @@ test("catalog rows are offered under the full id the CLI resolves them to, and g
   ]);
   assert.deepEqual(rows.map((row) => [row.id, row.native]), [["default", "default"], ["vendor-large-9", "large"]], "one id per model: the first row the CLI gives wins");
 });
+
+test("context size: the CLI's own figure, else the model library's, else the CLI's text, else the small default", () => {
+  const known = { contextWindow: 1_000_000, maxTokens: 128_000 };
+  assert.equal(normalizeRow({ value: "m", displayName: "M", description: "" }, known).contextWindow, 1_000_000);
+  assert.equal(normalizeRow({ value: "m", displayName: "M", description: "" }, known).maxTokens, 128_000);
+  assert.equal(normalizeRow({ value: "m", displayName: "M", description: "", contextWindow: 123456 }, known).contextWindow, 123456);
+  assert.equal(normalizeRow({ value: "m", displayName: "M", description: "" }, undefined).contextWindow, 200_000);
+  const asked = [];
+  const rows = rowsFromDiscovery([{ value: "alias", resolvedModel: "full-model-id[1m]", displayName: "A", description: "" }], (id) => { asked.push(id); return known; });
+  assert.deepEqual(asked, ["full-model-id"]);
+  assert.equal(rows[0].contextWindow, 1_000_000);
+});
+
+test("the usage chunk carries the cost the CLI reports for the request, and none when it reports none", () => {
+  const message = { stop_reason: "end_turn", content: [{ type: "text", text: "one" }] };
+  const usageOf = (extra) => new EventTranslator([]).finish(message, { input_tokens: 1, output_tokens: 1 }, extra).find((c) => c.type === "usage").usage;
+  assert.equal(usageOf({ result: { total_cost_usd: 0.0125 } }).costUsd, 0.0125);
+  assert.equal("costUsd" in usageOf({ result: {} }), false);
+  assert.equal("costUsd" in usageOf(undefined), false);
+});

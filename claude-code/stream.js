@@ -139,7 +139,7 @@ export class EventTranslator {
    * Close the turn: verify the incremental stream against the authoritative final message (or emit it whole when no
    * incremental events arrived), then yield usage and the terminal finish with the replay state.
    */
-  finish(message, usage, { initialUserPrefix, initialSystemMessages } = {}) {
+  finish(message, usage, { initialUserPrefix, initialSystemMessages, result } = {}) {
     const chunks = [];
     const authoritative = message.content.map((native) => harnessBlock(native, this.toolNames)).filter(Boolean);
     if (!this.sawContentEvent) {
@@ -161,7 +161,9 @@ export class EventTranslator {
     }
     const mapped = mapStopReason(message.stop_reason);
     if (mapped.error) throw new ClaudeCodeError(mapped.error, CODES.FAILED);
-    chunks.push({ type: "usage", usage: mapUsage(usage) });
+    // The CLI prices each request itself (list price, also on a plan login): passed on so a UI can total it.
+    const cost = result?.total_cost_usd;
+    chunks.push({ type: "usage", usage: { ...mapUsage(usage), ...(Number.isFinite(cost) && cost >= 0 ? { costUsd: cost } : {}) } });
     const projection = assistantProjection({ content: authoritative });
     chunks.push({
       type: "finish",

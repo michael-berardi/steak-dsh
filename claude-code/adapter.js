@@ -63,7 +63,7 @@ export function createClaudeCodeAdapter(harness, { env = () => process.env, time
             if (status.detail && !this.reportedCatalogFailure) { this.reportedCatalogFailure = true; report?.(`claude-code: no models offered: ${status.detail}`); }
             return undefined;
           }
-          const rows = rowsFromDiscovery(await discoverClaudeModels(env(), undefined));
+          const rows = rowsFromDiscovery(await discoverClaudeModels(env(), undefined), harness.libraryModel);
           this.catalog = { rows, expires: Date.now() + CATALOG_TTL_MS };
           return rows;
         })().catch((error) => {
@@ -130,6 +130,10 @@ export function createClaudeCodeAdapter(harness, { env = () => process.env, time
 
       const done = runClaudeRequest(request).then(
         (response) => {
+          // The CLI states the window it really ran with: later turns use it, whatever the list said.
+          const ran = Object.values(response.result?.modelUsage ?? {})[0]?.contextWindow;
+          const listed = this.catalog?.rows.find((candidate) => candidate.id === options.model);
+          if (listed && Number.isInteger(ran) && ran > 0) listed.contextWindow = ran;
           queue.push(translator.finish(response.message, response.usage, response));
           completed = true;
           queue.end();

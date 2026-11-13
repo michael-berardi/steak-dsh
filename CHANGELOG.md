@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1 - 2026-11-13
+
+- Models on the `claude-code` route were offered with a 200K context window although they run with 1M: the CLI's model
+  list states no window, and the route fell back to the small default. The window now comes from the harness's own
+  model catalog, and after the first reply from the figure the CLI reports for the model it ran. The context meter and
+  compaction use the real size.
+- The cost in the status band was always `$0.000` on the two login routes. It now shows the list price of the work:
+  the figure the CLI reports for each request on `claude-code`, and tokens times the catalog price otherwise. A login
+  route whose model the catalog does not list still shows `$0.000`.
+
 ## 0.7.0 - 2026-11-13
 
 - The terminal UI has room at the top: one blank row above the header and one between the header and the first

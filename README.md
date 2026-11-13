@@ -61,7 +61,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.7.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.7.1
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -70,7 +70,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.7.0
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.7.0
+npm i -g github:michael-berardi/steak-dsh#v0.7.1
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -363,10 +363,11 @@ context meter, tokens and cache share:
 ```
 
 The band reads `◆ model · effort · state`, then a context meter and `◫ percent/window · tokens · cache share · cost`.
-An atom with no data is left out rather than guessed. The harness reports tokens, not money, so the cost is the
-session's tokens times the model's price in the harness's own model catalog (cache reads and writes at their own
-rates). The `claude-code` and `openai-codex` login routes are billed to your plan and show `$0.000`. A route with no
-known price, such as a gateway declared with `--base-url`, shows no cost. States: `● ready`, `◆ thinking`, `◆ responding`, `◆ tool <name>`, `◇ waiting · <what>`, `◆ compacting`,
+An atom with no data is left out rather than guessed. The cost is what the route reports for each request when it
+does (the `claude-code` route passes on the figure the CLI states); otherwise it is the session's tokens times the
+model's price in the harness's own model catalog, with cache reads and writes at their own rates. On a login billed
+to a plan this is the list price of the work, not a charge. A route with no known price, such as a gateway declared
+with `--base-url`, shows no cost. States: `● ready`, `◆ thinking`, `◆ responding`, `◆ tool <name>`, `◇ waiting · <what>`, `◆ compacting`,
 `✓ complete`, `! error · <why>`, `! stopped · <why>`.
 
 Keys: Enter sends; Ctrl-J, Alt-Enter or a trailing `\` then Enter adds a line; Up/Down browse history at the edges;
