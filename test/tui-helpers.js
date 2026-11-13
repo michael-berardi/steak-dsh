@@ -23,7 +23,7 @@ const fs = require("node:fs");
 const log = (entry) => { if (process.env.FAKE_DSH_LOG) fs.appendFileSync(process.env.FAKE_DSH_LOG, JSON.stringify(entry) + "\n"); };
 const scenario = process.env.FAKE_DSH_SCENARIO ? JSON.parse(fs.readFileSync(process.env.FAKE_DSH_SCENARIO, "utf8")) : {};
 const startIndex = fs.existsSync(process.env.FAKE_DSH_LOG || "") ? fs.readFileSync(process.env.FAKE_DSH_LOG, "utf8").split("\n").filter((l) => l.includes('"start"')).length : 0;
-log({ start: process.pid, argv: process.argv.slice(2) });
+log({ start: process.pid, argv: process.argv.slice(2), hostEnv: Object.keys(process.env).filter((k) => ["ULTRATERM_UI_TRANSCRIPT_FILE", "ULTRATERM_UI_SESSION_ID", "ULTRATERM_MAIN_SCREEN"].includes(k)) });
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const waiting = new Map();
 let nextId = 9000;

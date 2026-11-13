@@ -1,12 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { rmSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Controller } from "../lib/tui/session.js";
-import { transcriptFromEnv } from "../lib/tui/transcript-publisher.js";
+import { MAX_TEXT, transcriptFromEnv } from "../lib/tui/transcript-publisher.js";
+import { launchEnv } from "../lib/dsh.js";
+import { tuiCommand } from "../lib/tui/index.js";
+import { Readable, Writable } from "node:stream";
 import { ev, makeFakeDsh, status, textMsg, toolResult, until } from "./tui-helpers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +44,7 @@ function rig(scenario, { env = {}, prepare, publish = true, options = OPTIONS } 
   const cwd = join(home, "work");
   mkdirSync(cwd);
   const id = randomUUID();
+  mkdirSync(join(home, ".ultraterm"), { mode: 0o700 });
   const dir = join(home, ".ultraterm", "ui-transcripts");
   const file = join(dir, `${id}.jsonl`);
   prepare?.({ home, dir, file, id });
@@ -112,11 +116,11 @@ test("usage is published in Pi's shape; cost.total only when the session has a p
 });
 
 const REFUSALS = [
-  ["a symlink at the path", ({ file, home }) => { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); writeFileSync(join(home, "target"), "keep\n"); symlinkSync(join(home, "target"), file); }, /symlink|regular/i],
+  ["a symlink at the path", ({ file, home }) => { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); writeFileSync(join(home, "target"), "keep\n"); symlinkSync(join(home, "target"), file); }, /already exists/i],
   ["a path that does not end in the session id", null, /session id/i, { ULTRATERM_UI_TRANSCRIPT_FILE: "/tmp/other-name.jsonl" }],
   ["a relative path", null, /absolute/i, { ULTRATERM_UI_TRANSCRIPT_FILE: "ui-transcripts/x.jsonl" }],
   ["a group-writable folder", ({ dir }) => { mkdirSync(dir, { recursive: true }); chmodSync(dir, 0o770); }, /writable/i],
-  ["a path that is a directory", ({ file }) => { mkdirSync(file, { recursive: true, mode: 0o700 }); }, /regular/i],
+  ["a path that is a directory", ({ file }) => { mkdirSync(file, { recursive: true, mode: 0o700 }); }, /already exists/i],
 ];
 for (const [name, prepare, pattern, env] of REFUSALS) {
   test(`${name} publishes nothing and shows one notice`, async () => {
@@ -228,11 +232,19 @@ test("with the variables unset nothing is written anywhere", async () => {
   const home = mkdtempSync(join(tmpdir(), "steak-dsh-none-"));
   assert.equal(transcriptFromEnv({}, { cwd: home }), undefined);
   assert.equal(transcriptFromEnv({ ULTRATERM_UI_TRANSCRIPT_FILE: "", ULTRATERM_UI_SESSION_ID: "" }, { cwd: home }), undefined);
+  // A real publisher path: the rig's transcript path exists nowhere, the variables are unset, and a controller is
+  // built exactly as the TUI builds it (publisher from the environment). Nothing may be created under the home.
   const t = rig({ onPrompt: SHORT_TURN }, { publish: false });
-  await t.c.start();
-  await t.turn("hi");
-  await t.c.quit();
-  assert.deepEqual(readdirSync(t.home), ["work"], "no .ultraterm folder appeared");
+  const publisher = transcriptFromEnv({ PATH: process.env.PATH }, { cwd: t.cwd });
+  assert.equal(publisher, undefined);
+  const fake = makeFakeDsh({ onPrompt: SHORT_TURN });
+  const c = new Controller({ bin: fake.bin, args: ["--profile", "sdk"], options: OPTIONS, cwd: t.cwd, env: fake.env, publisher });
+  await c.start();
+  await c.submit("hi");
+  await until(() => c.state.phase === "complete", "turn");
+  await c.quit();
+  assert.deepEqual(readdirSync(t.home).sort(), [".ultraterm", "work"]);
+  assert.deepEqual(readdirSync(join(t.home, ".ultraterm")), [], "nothing was created in the transcript folder's parent");
   assert.deepEqual(readdirSync(t.cwd), []);
   assert.equal(t.notices().length, 0);
 });
@@ -244,4 +256,238 @@ test("only one of the two variables set: nothing published and one notice", asyn
   await t.c.quit();
   assert.equal(t.notices().length, 1);
   assert.ok(!existsSync(t.file));
+});
+
+const withHome = (name) => mkdtempSync(join(tmpdir(), `steak-dsh-${name}-`));
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test("D1: a second publisher on the same path refuses and leaves the first file's bytes unchanged", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("hi");
+  const before = readFileSync(t.file);
+  const ino = statSync(t.file).ino;
+  const notes = [];
+  const second = transcriptFromEnv({ ULTRATERM_UI_TRANSCRIPT_FILE: t.file, ULTRATERM_UI_SESSION_ID: t.id }, { cwd: t.cwd });
+  assert.equal(second.start((x) => notes.push(x)), false);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /already exists/);
+  second.observe({ type: "submit", text: "x" }, {}, {});
+  assert.deepEqual(readFileSync(t.file), before);
+  assert.equal(statSync(t.file).ino, ino);
+  assert.deepEqual(readdirSync(t.dir), [`${t.id}.jsonl`]);
+  await t.c.quit();
+});
+
+test("D1: launchEnv removes the three host variables; the child the TUI spawns never sees them", async () => {
+  const declared = { ULTRATERM_UI_TRANSCRIPT_FILE: "/x/y.jsonl", ULTRATERM_UI_SESSION_ID: "id", ULTRATERM_MAIN_SCREEN: "1", KEEP: "1" };
+  const env = launchEnv(declared);
+  for (const name of Object.keys(declared).filter((k) => k.startsWith("ULTRATERM_") && k !== "ULTRATERM_PROVIDER_ACCOUNT")) assert.ok(!(name in env), `${name} is stripped`);
+  assert.equal(env.KEEP, "1");
+  const home = withHome("child");
+  mkdirSync(join(home, ".ultraterm"), { mode: 0o700 });
+  const id = randomUUID();
+  const file = join(home, ".ultraterm", "ui-transcripts", `${id}.jsonl`);
+  const fake = makeFakeDsh({ onPrompt: [status("running"), ev({ type: "turn/start", turn: 1 }), { hang: true }] });
+  const hostEnv = { ...fake.env, NO_COLOR: "1", ULTRATERM_UI_TRANSCRIPT_FILE: file, ULTRATERM_UI_SESSION_ID: id, ULTRATERM_MAIN_SCREEN: "1" };
+  const stdin = Readable.from([]);
+  const out = new Writable({ write(_c, _e, cb) { cb(); } });
+  await tuiCommand({ ...OPTIONS, stock: true }, { root: join(here, ".."), bin: fake.bin, stdin, stdout: out, env: hostEnv });
+  assert.ok(existsSync(file), "the publisher itself did get the variables");
+  const starts = fake.starts();
+  assert.ok(starts.length >= 1);
+  for (const s of starts) assert.deepEqual(s.hostEnv, [], "the child has none of the three host variables");
+});
+
+test("D1: a nested steak-dsh tui on a pipe inside a declared pane publishes nothing and leaves the file alone", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("hi");
+  const before = readFileSync(t.file);
+  // The environment a tool run by the agent would inherit is the child's: launchEnv of the declared one.
+  const nestedEnv = launchEnv({ ...t.fake.env, NO_COLOR: "1", ULTRATERM_UI_TRANSCRIPT_FILE: t.file, ULTRATERM_UI_SESSION_ID: t.id, ULTRATERM_MAIN_SCREEN: "1" });
+  const fake2 = makeFakeDsh({ onPrompt: SHORT_TURN });
+  const stdin = Readable.from(["task\n"]);
+  const out = new Writable({ write(_c, _e, cb) { cb(); } });
+  await tuiCommand({ ...OPTIONS, stock: true }, { root: join(here, ".."), bin: fake2.bin, stdin, stdout: out, env: { ...nestedEnv, FAKE_DSH_SCENARIO: fake2.scenarioPath, FAKE_DSH_LOG: fake2.logPath } });
+  assert.deepEqual(readFileSync(t.file), before, "the outer transcript is untouched");
+  assert.deepEqual(readdirSync(t.dir), [`${t.id}.jsonl`]);
+  await t.c.quit();
+});
+
+test("D2: refusals - non-canonical or uppercase uuid, other names, a missing parent, a recursive folder, an unsafe parent", () => {
+  const home = withHome("d2");
+  const notice = (file, id) => { const out = []; const p = transcriptFromEnv({ ULTRATERM_UI_TRANSCRIPT_FILE: file, ULTRATERM_UI_SESSION_ID: id }, { cwd: home }); const ok = p.start((x) => out.push(x)); return { ok, out }; };
+  const id = randomUUID();
+  mkdirSync(join(home, "base"), { mode: 0o700 });
+  for (const bad of ["abc", id.toUpperCase(), `${id}x`, "../etc", `${id.slice(0, 8)}${id.slice(8).replace(/-/g, "")}`]) {
+    const r = notice(join(home, "base", `${bad}.jsonl`), bad);
+    assert.equal(r.ok, false, bad);
+    assert.equal(r.out.length, 1);
+  }
+  assert.match(notice(join(home, "base", `${id}.jsonl.bak`), id).out[0], /session id/);
+  assert.match(notice(join(home, "no", "such", "ui", `${id}.jsonl`), id).out[0], /parent .*does not exist/);
+  assert.ok(!existsSync(join(home, "no")), "no recursive folder creation");
+  chmodSync(join(home, "base"), 0o770);
+  assert.match(notice(join(home, "base", "sub", `${id}.jsonl`), id).out[0], /parent.*writable/);
+  assert.ok(!existsSync(join(home, "base", "sub")));
+  chmodSync(join(home, "base"), 0o700);
+  const ok = notice(join(home, "base", "sub", `${id}.jsonl`), id);
+  assert.equal(ok.ok, true, "a single new folder under a good parent is created");
+  assert.equal(statSync(join(home, "base", "sub")).mode & 0o777, 0o700);
+});
+
+test("D2: an existing session file of someone else is never replaced at start", () => {
+  const home = withHome("d2b");
+  const id = randomUUID();
+  mkdirSync(join(home, "pi"), { mode: 0o700 });
+  const file = join(home, "pi", `${id}.jsonl`);
+  writeFileSync(file, "precious\n");
+  const p = transcriptFromEnv({ ULTRATERM_UI_TRANSCRIPT_FILE: file, ULTRATERM_UI_SESSION_ID: id }, { cwd: home });
+  assert.equal(p.start(() => {}), false);
+  assert.equal(readFileSync(file, "utf8"), "precious\n");
+});
+
+test("D3: the replace temp file has a random name, is removed on failure, and a foreign temp file is never touched", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  const p = t.c.publisher;
+  const seen = [];
+  // A failed replace (the target is turned into a non-empty directory so rename fails) leaves no temp file.
+  const before = readFileSync(t.file);
+  p.file = join(t.dir, `${t.id}.jsonl`);
+  rmSync(t.file);
+  mkdirSync(t.file);
+  writeFileSync(join(t.file, "keep"), "x");
+  assert.throws(() => p.replace());
+  assert.deepEqual(readdirSync(t.dir), [`${t.id}.jsonl`], "no temp file left");
+  rmSync(t.file, { recursive: true });
+  writeFileSync(t.file, before);
+  // A foreign file at the old pid-based name is not touched.
+  const old = `${t.file}.${process.pid}.tmp`;
+  writeFileSync(old, "foreign");
+  p.replace();
+  assert.equal(readFileSync(old, "utf8"), "foreign");
+  for (const name of readdirSync(t.dir)) seen.push(name);
+  assert.deepEqual(seen.sort(), [`${t.id}.jsonl`, `${t.id}.jsonl.${process.pid}.tmp`].sort());
+  // The temp name collides with a file this process did not create: replace fails and leaves that file alone.
+  p.tmpSuffix = () => "collide";
+  const collide = `${t.file}.collide.tmp`;
+  writeFileSync(collide, "foreign temp");
+  assert.throws(() => p.replace(), (e) => e.code === "EEXIST");
+  assert.equal(readFileSync(collide, "utf8"), "foreign temp", "a temp file this process did not create is not removed");
+  await t.c.quit();
+});
+
+test("D4: a deleted file stops publishing, is not recreated, and shows one notice", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("first");
+  rmSync(t.file);
+  await t.turn("second");
+  await t.turn("third");
+  assert.ok(!existsSync(t.file), "not recreated");
+  assert.equal(t.notices().length, 1);
+  assert.equal(t.c.state.blocks.filter((b) => b.kind === "assistant").length, 3);
+  await t.c.quit();
+});
+
+test("D4: a file replaced by something else is never appended to, even by the final row", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("first");
+  rmSync(t.file);
+  writeFileSync(t.file, "foreign line\n");
+  await t.turn("second");
+  await t.turn("third");
+  assert.equal(readFileSync(t.file, "utf8"), "foreign line\n");
+  assert.equal(t.notices().length, 1);
+  await t.c.quit();
+});
+
+test("D4: on a write error one final row says publishing stopped (no path, no user text); a later /new resumes", { skip: isRoot && "root ignores file modes" }, async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("first");
+  const good = t.rows().length;
+  // Make the row write fail but the final row succeed: the first append of the next message throws once.
+  const publisher = t.c.publisher;
+  const realAppend = publisher.append.bind(publisher);
+  let armed = true;
+  publisher.append = (entry) => { if (armed) { armed = false; const e = new Error("disk full"); e.code = "ENOSPC"; throw e; } return realAppend(entry); };
+  await t.turn("second secret text");
+  const rows = t.rows();
+  assert.equal(rows.length, good + 1, "exactly one final row");
+  const last = rows.at(-1);
+  assert.equal(last.message.role, "assistant");
+  assert.equal(last.message.stopReason, "error");
+  assert.equal(last.message.content.length, 1);
+  assert.equal(last.message.content[0].type, "text");
+  const raw = JSON.stringify(last);
+  assert.ok(!raw.includes(t.home) && !raw.includes("secret"), "no path and no user text");
+  assert.equal(last.parentId, rows.at(-2).id);
+  await t.turn("third");
+  assert.equal(t.rows().length, good + 1, "nothing more while stopped");
+  assert.equal(t.notices().length, 1);
+  await t.c.submit("/new");
+  assert.deepEqual(t.rows(), [{ type: "session", version: 3, id: t.id, cwd: t.cwd }], "a fresh replace worked");
+  await t.turn("after new");
+  assert.equal(t.rows().length, 4);
+  assert.equal(t.rows()[1].message.content[0].text, "after new");
+  await t.c.quit();
+});
+
+test("D5: every published text field is cut at 262144 characters with the suffix; exactly at the limit is kept", async () => {
+  const big = (n) => "a".repeat(n);
+  const turn = [status("running"), ev({ type: "turn/start", turn: 1 }),
+    ev({ type: "assistant/message", turn: 1, step: 1, stream: [], message: textMsg(big(MAX_TEXT + 1)) }),
+    call(1, 1, "w1", "write", { file_path: "a.txt", content: big(MAX_TEXT + 5), note: big(MAX_TEXT) }),
+    ev({ type: "tool/result", turn: 1, step: 1, message: toolResult("w1", big(MAX_TEXT + 10)) }),
+    ev({ type: "turn/end", turn: 1, reason: { kind: "completed" } }), status("idle")];
+  const t = rig({ onPrompt: turn });
+  await t.c.start();
+  await t.turn(big(MAX_TEXT + 2));
+  await t.c.quit();
+  const rows = t.rows().slice(1);
+  const SUFFIX = "\n[truncated]";
+  assert.equal(rows[0].message.content[0].text, big(MAX_TEXT) + SUFFIX, "user text");
+  assert.equal(rows[1].message.content[0].text, big(MAX_TEXT) + SUFFIX, "assistant text");
+  const args = rows[2].message.content[0].arguments;
+  assert.equal(args.content, big(MAX_TEXT) + SUFFIX, "tool argument");
+  assert.equal(args.note, big(MAX_TEXT), "exactly at the limit is untouched");
+  assert.equal(rows[3].message.content[0].text, big(MAX_TEXT) + SUFFIX, "tool result");
+  for (const r of rows) assert.ok(JSON.stringify(r).length < 4 * MAX_TEXT);
+});
+
+test("M1: a tool call with file_path also carries path with the same value; other arguments are unchanged", async () => {
+  const t = rig({ onPrompt: FULL_TURN });
+  await t.c.start();
+  await t.turn("go");
+  await t.c.quit();
+  const calls = t.rows().filter((r) => r.message?.content?.[0]?.type === "toolCall").map((r) => r.message.content[0]);
+  assert.deepEqual(calls[0].arguments, { file_path: "src/pane.js", path: "src/pane.js" });
+  assert.equal(calls[1].arguments.path, "src/pane.js");
+  assert.equal(calls[1].arguments.old_string, "const gap = 1;");
+  assert.deepEqual(calls[2].arguments, { command: "npm test -- --grep pane" }, "no file_path, no path");
+});
+
+test("M2: a cancelled turn ends with aborted and an errored one with error", async () => {
+  const hang = [status("running"), ev({ type: "turn/start", turn: 1 }), call(1, 1, "c1", "bash", { command: "sleep 99" }), { hang: true }];
+  const t = rig({ onPrompt: hang });
+  await t.c.start();
+  await t.c.submit("long");
+  await until(() => t.c.state.phase === "tool", "tool running");
+  assert.equal(await t.c.cancel(), true);
+  const stop = t.rows().at(-1);
+  assert.equal(stop.message.stopReason, "aborted");
+  assert.equal(t.rows().filter((r) => r.message?.role === "toolResult" && r.message.isError).length, 1);
+  await t.c.quit();
+});
+
+test("M2: only the three stop reasons stop, error and aborted are ever published", async () => {
+  const t = rig({ onPrompt: FULL_TURN });
+  await t.c.start();
+  await t.turn("go");
+  await t.c.quit();
+  for (const r of t.rows().slice(1)) if (r.message.stopReason !== undefined) assert.ok(["stop", "error", "aborted"].includes(r.message.stopReason));
 });

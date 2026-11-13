@@ -7,6 +7,14 @@
   results, a stop row per turn, token usage and cost); the file is `0600` in a `0700` folder, never follows a symlink,
   and a write error stops publishing with one notice instead of interrupting the session. `/new` and `/resume` start a
   fresh file. Without the variables nothing is written. See "Showing the conversation in a host app" in the README.
+- Hardening of that file: the three host variables are removed from the environment of the harness child and every
+  tool it runs, so a nested `steak-dsh tui` publishes nothing; the file is created at start with an exclusive,
+  no-follow create and an existing file is refused; the session id must be a lowercase uuid and no folder is created
+  recursively; the `/new` temp file has a random name and is only removed when this process made it; every append
+  checks the file's device and inode, and a deleted or replaced file stops publishing without writing to the other
+  file; a write error appends one final `error` row, and `/new` resumes publishing; each text field is cut at
+  262144 characters; tool arguments with `file_path` also carry `path`. The README now says the file holds full tool
+  arguments and results, gives the host manifest snippet, and names the stop reasons (`stop`, `error`, `aborted`).
 - `ULTRATERM_MAIN_SCREEN=1` keeps the terminal UI on the main screen instead of the alternate screen. Without it the
   bytes written are unchanged.
 

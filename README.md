@@ -394,21 +394,52 @@ environment variables; without them the TUI writes no file and behaves exactly a
 
 | Variable | Meaning |
 |---|---|
-| `ULTRATERM_UI_TRANSCRIPT_FILE` | absolute path of the file to write; it must end in `<ULTRATERM_UI_SESSION_ID>.jsonl` |
-| `ULTRATERM_UI_SESSION_ID` | the session id the host gave this pane |
+| `ULTRATERM_UI_TRANSCRIPT_FILE` | absolute path of the file to write; it must end in `<ULTRATERM_UI_SESSION_ID>.jsonl` and must not exist yet |
+| `ULTRATERM_UI_SESSION_ID` | the session id the host gave this pane: a canonical lowercase uuid |
 | `ULTRATERM_MAIN_SCREEN` | `1`: stay on the main screen (no alternate-screen switch); the cursor ends on a fresh line below the last frame |
 
-The file is a Pi-format session log: a header `{"type":"session","version":3,"id","cwd"}`, then one JSON row per line,
-append-only, each with a unique `id` and a `parentId` pointing at the previous row. Rows are your messages (slash
-commands sent to the harness included; `/help` and `/exit` are not), the assistant's text, each tool call
-(`{type:"toolCall", id, name, arguments}` with the harness's own tool name and arguments), each tool result
-(`toolCallId`, `toolName`, `isError`, text), and an assistant row with `stopReason` (`stop`, `error` or `aborted`) that
-ends each turn. Assistant rows carry token usage, with `cost.total` when the session has a price. Reasoning text is
-never written. `/new` and `/resume` replace the file atomically with a fresh header carrying the same id.
+The TUI reads these three variables and removes them from the environment of everything it starts: the harness
+child, and so every tool the agent runs. A `steak-dsh tui` started from inside the pane therefore publishes nothing.
 
-The folder is created `0700` and the file `0600`; the TUI refuses a symlink at the path, a path that does not end in the
-session id, a relative path, and a folder that is not yours or is group or world writable. It then publishes nothing and
-says why in one notice. A write error later stops publishing with one notice; the conversation carries on.
+**What the file holds.** It is a Pi-format session log: a header `{"type":"session","version":3,"id","cwd"}`, then one
+JSON row per line, append-only, each with a unique `id` and a `parentId` pointing at the previous row. Rows are your
+messages (slash commands sent to the harness included, with their full text; `/help` and `/exit` are not), the
+assistant's text, each tool call (`{type:"toolCall", id, name, arguments}`), each tool result (`toolCallId`,
+`toolName`, `isError`, text), and an assistant row with `stopReason` that ends each turn. The file holds **full tool
+arguments and results**: file contents written or read, command lines (which can contain secrets typed inline), and
+whatever a tool printed. Assistant rows carry token usage, with `cost.total` when the session has a price. Reasoning
+text is never written. Diffs are not published: an edit shows its arguments and its result text, not a diff. Each
+text field (a message, one tool argument string, one tool result) is cut at 262144 characters and ends with
+`\n[truncated]`.
+
+- Tool arguments are the harness's own object, unchanged. When it has a `file_path` string, a `path` key with the
+  same value is added, because hosts read `path`; `command` is read as it is.
+- `stopReason` is exactly one of `stop` (the turn finished), `error` (the model or harness failed, or publishing
+  itself stopped; `errorMessage` says why) and `aborted` (you cancelled the turn).
+- The file is `0600` in a `0700` folder. This tool never deletes it: the host that chose the path owns its life (UltraTerm
+  deletes a pane's file when the pane closes and removes files older than 14 days at app start). If you run the TUI by
+  hand with these variables, delete the file yourself.
+- The TUI creates the file at start with an exclusive, no-follow create and refuses if anything is already there
+  (a file, a symlink, a folder): it never replaces or appends to an existing file. It also refuses a relative path, a
+  name that is not `<uuid>.jsonl`, a missing parent folder (it creates only the one transcript folder, `0700`, and
+  only when its parent exists, is yours and is not group or world writable), and a folder that is not yours or is
+  group or world writable. It then publishes nothing and says why in one notice.
+- `/new` and `/resume` replace the file atomically (a random-named temp file, then rename) with a fresh header carrying
+  the same id, and resume publishing if it had stopped.
+- Every append checks that the path is still the file this process created (same device and inode, no symlink
+  followed). If it was deleted or replaced, publishing stops and the foreign file is never written to. On a write
+  error the TUI tries once to append a final assistant row (`stopReason: "error"`, one generic text sentence, no path
+  and no message text), then stops with one notice; the conversation carries on.
+
+**Manifest a host needs.** A host app that declares this harness as a transcript publisher needs the whole snippet; the
+interrupt key is Escape (the TUI cancels the running turn on a lone Escape, not on Ctrl-C):
+
+```json
+"uiTranscript": {"schema": "ultraterm.transcript/1", "mainScreen": true, "interrupt": "escape"}
+```
+
+The three variables are set by the host's launcher. The host also publishes the file's location to its own app on a
+tmux pane option, `@ultraterm-ui-transcript`; that is done by the host's launcher, not by this tool.
 
 ## Benchmark
 
