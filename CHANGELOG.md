@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 - 2026-11-12
+
+- New model route `openai-codex`: requests go to the Codex Responses endpoint on your ChatGPT plan, with the login the
+  official Codex CLI keeps (`auth.json` in `$CODEX_HOME`, default `~/.codex`). The route adds no wire code: it runs
+  dsh's own Codex transport and supplies the token, read at request time and never printed, logged or put in the
+  environment. An expired token is renewed with the refresh token and the renewed login is written back to the same
+  file in the CLI's format. No login fails with `CODEX_NOT_LOGGED_IN`, a refused renewal with `CODEX_TOKEN_EXPIRED`.
+  The route never uses an API key; a Codex CLI in API-key mode is refused. Module in `codex/`.
+- The route's models are the ones the Codex backend lists for your account, asked at runtime, with their context size
+  and effort levels. Nothing is listed in the bundle; a test fails if a shipped file names a model.
+- `steak-dsh run|chat|tui --model openai-codex/<model>` works without `--base-url` or a key; `--stock` refuses it.
+- New command `steak-dsh models [--json] [--provider <name>]`: prints every model the `claude-code` and `openai-codex`
+  routes offer right now, one `provider/model-id` per line. `scripts/compare-with-steak-pi.mjs` compares that list
+  with `steak-pi --list-models`.
+- Fixed: the `claude-code` route offered only part of the login's models. The model list was asked with the
+  quiet-network switches the route sets on requests, and with either set the CLI answers from a short built-in list
+  (5 rows instead of 14 on CLI 2.1.322). The list is now asked without those two switches; requests keep them.
+- Changed: `claude-code` rows are offered under the full model id the CLI resolves them to, the form Steak Pi lists,
+  and go to the CLI under the CLI's own name for the row. The CLI's short names still work as typed ids.
+
 ## 0.5.0 - 2026-11-12
 
 - One bundle, one profile. A new tool, `more_tools` (plugin `steak-more-tools`), costs about 250 bytes on the first

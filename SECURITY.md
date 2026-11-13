@@ -17,4 +17,9 @@ Steak DSH plugins run inside the `dsh` process with its permissions.
 - **Verify after edit** runs a shell command. The command is read only from places you control: the launcher flag,
   the bundle row config, or `$DSH_HOME/steak-dsh.json`. A `.steak-dsh/config.json` inside a project is ignored
   unless you listed that project under `trusted`, so cloning a repository cannot make the harness run its command.
+- **The Codex route** reads the Codex CLI's login file (`auth.json` in `$CODEX_HOME`) when a request or a model
+  list needs a token. The token is never printed, logged or put in the environment. The route writes that file in
+  one case only: after renewing an expired token, it saves the renewed login back in the CLI's format, because the
+  refresh token changes on every renewal. Requests go only to the Codex backend and the login server; an endpoint
+  override in the route's row config must be HTTPS or on this machine.
 - **Keys** are never passed on the command line. `--key-env` takes the name of an environment variable.

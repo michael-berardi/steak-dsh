@@ -61,7 +61,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.5.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.6.0
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -70,7 +70,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.5.0
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.5.0
+npm i -g github:michael-berardi/steak-dsh#v0.6.0
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -168,6 +168,10 @@ steak-dsh run --model acme/coder-large --base-url https://gateway.example/v1 --a
 # a model route that runs on your own Claude Code login: no --base-url, no key (see "The Claude Code route")
 steak-dsh run --model claude-code/<model> "explain what src/slug.js does"
 
+# a model route that runs on your Codex CLI's ChatGPT login: no --base-url, no key (see "The Codex route")
+steak-dsh run --model openai-codex/<model> "explain what src/slug.js does"
+
+steak-dsh models                                              # what those two routes offer right now
 steak-dsh chat --model deepseek-official/deepseek-flash      # line-based terminal chat
 steak-dsh tui --model deepseek-official/deepseek-flash       # full-screen terminal UI
 steak-dsh run --stock "same task on stock dsh"                # A/B against the unmodified harness
@@ -191,8 +195,11 @@ steak-dsh run --model claude-code/<model> --effort high "task"    # thinking on;
 ```
 
 - **Models come from the CLI.** The route asks the installed `claude` for the models your login can use and offers
-  exactly those; `<model>` is the id the CLI reports (`claude`'s own `--model` value). Nothing is listed in the bundle.
-  Any other id is passed to the CLI, which decides.
+  exactly those. Nothing is listed in the bundle. `<model>` is the full model id the CLI says a row resolves to (the
+  CLI's `default` row stays `default`), and the request goes to the CLI under the CLI's own name for that row. Any
+  other id, such as the CLI's short names, is passed to the CLI, which decides. The list is asked without the two
+  quiet-network switches the route sets on requests, because with either set the CLI answers from a short built-in
+  list (5 rows instead of 14 on CLI 2.1.322).
 - **Missing or logged out.** The route offers no models, and a request fails with one named error:
   `CLAUDE_CODE_NOT_READY`, saying to install Claude Code (or set `STEAK_DSH_CLAUDE_CODE_COMMAND` to the executable) or to
   run `claude auth login`. Nothing else in the bundle changes. Nothing starts until a model is listed or requested.
@@ -218,6 +225,73 @@ steak-dsh run --model claude-code/<model> --effort high "task"    # thinking on;
 Settings: environment `STEAK_DSH_CLAUDE_CODE_COMMAND` (path of the executable, default `claude` on PATH) and
 `STEAK_DSH_CLAUDE_CODE_CONFIG_DIR` (passed to Claude Code as its `CLAUDE_CONFIG_DIR`; it never changes that folder). Switch the
 route off from your profile patch with `- id: steak-cc-route` and `disabled: true`.
+
+## The Codex route
+
+The bundle adds a second model route, `openai-codex`. A request on it goes to the Codex Responses endpoint
+(`https://chatgpt.com/backend-api`) on your own ChatGPT plan, with the login the official Codex CLI (`codex`) keeps on
+your machine. The harness keeps the conversation, the tools and the approvals. The module lives in `codex/`.
+
+```sh
+codex login                                           # once, with the Codex CLI itself
+steak-dsh run --model openai-codex/<model> "task"     # also: chat, tui
+steak-dsh run --model openai-codex/<model> --effort high "task"
+```
+
+- **No new wire code.** dsh already ships the Codex transport (the `openai-codex-responses` implementation in the LLM
+  library it bundles) but only offers it with a login kept in dsh's own store. dsh's `openai-responses` protocol with
+  extra headers cannot carry this endpoint: the path, the required `instructions` and `store: false` fields and the
+  account header differ, and a declared route takes a fixed key, not a login that expires. So the route hands each
+  request to dsh's own route adapter around that transport and supplies the token. Tool calls, tool results, thinking
+  and token usage are handled by dsh exactly as on its other routes. On a dsh build that does not expose the
+  transport a request fails with `CODEX_HARNESS_UNSUPPORTED`.
+- **Models come from the backend.** The route asks the Codex backend for the models your account can use and offers
+  exactly the ones the backend lists. Nothing is listed in the bundle. Context size and effort levels come from the
+  same answer. Any other id is sent as typed and the backend decides. Without `--effort` no effort is sent and the
+  model's own default applies; an effort the backend does not report for the model is refused before sending.
+- **Login.** The route reads `auth.json` in the Codex CLI's folder (`$CODEX_HOME`, default `~/.codex`) at the moment a
+  request or a model list needs a token, and at no other time. It never prints, logs or copies a token, and never
+  puts one in the environment. With no login a request fails with `CODEX_NOT_LOGGED_IN` and the route offers no
+  models. A login kept in the OS keyring cannot be read: set `cli_auth_credentials_store = "file"` in the Codex
+  config.
+- **Renewal.** A token at its expiry is renewed with the login's refresh token, the same request the CLI makes, and
+  the renewed login is written back to the same `auth.json` in the CLI's format (mode 600, other fields kept). It has
+  to be written back: the refresh token changes on every renewal, so a renewal that was not saved would log the CLI
+  out. If the renewal is refused the request fails with `CODEX_TOKEN_EXPIRED` and the file is left as it was.
+- **Subscription only.** The route never uses an API key and has no API-key endpoint. A Codex CLI set up with an API
+  key is refused with `CODEX_NOT_LOGGED_IN`. A usage-limit answer from the backend is returned as the error it is.
+- **Not in this version.** Images are not sent (the route declares text-only input). Requests use the HTTP stream,
+  not the WebSocket transport.
+- **Launcher.** `--model openai-codex/<model>` needs no `--base-url`, `--api` or `--key-env` (and refuses them).
+  `--stock` leaves the bundle out, so `--stock --model openai-codex/...` is refused.
+
+Settings: environment `STEAK_DSH_CODEX_HOME` (the folder holding `auth.json`; default `$CODEX_HOME`, then `~/.codex`)
+and `STEAK_DSH_CODEX_CLIENT_VERSION`. The backend hides a model from Codex clients older than the version that model
+needs, and the list request must name a version; the route asks as the newest client so nothing is hidden, and this
+variable asks as a specific one (`0.150.0`). Switch the route off from your profile patch with
+`- id: steak-codex-route` and `disabled: true`.
+
+## Listing models
+
+```sh
+steak-dsh models                          # one provider/model-id per line
+steak-dsh models --json --provider openai-codex
+```
+
+`steak-dsh models` prints what the two routes offer right now: `claude-code` rows from the installed CLI and
+`openai-codex` rows from the backend. It is read-only. A route that does not answer is named on stderr with its error
+code, the other route still prints, and the exit code is 1.
+
+The ids are in the form Steak Pi lists them, so the two tools can be compared:
+
+```sh
+node scripts/compare-with-steak-pi.mjs    # runs `steak-pi --list-models` and `steak-dsh models --json`
+```
+
+It prints, for each of the two routes, the ids only one tool lists. Exit 0 when the lists match, 1 when they differ,
+2 when a command fails. Steak Pi's `openai-codex` rows come from the model table inside Pi, and Steak DSH's from the
+backend's answer for your account, so they differ when that table carries a model your account does not list, or the
+other way round.
 
 ## The terminal UI
 
@@ -407,6 +481,6 @@ Plugins run inside the `dsh` process. Owned paths gate the file-editing tools, n
 ## Development
 
 ```sh
-npm test                    # 190 tests, Node built-ins only
+npm test                    # 234 tests, Node built-ins only
 python3 benchmarks/selftest.py   # 20 tasks: check fails untouched, passes on the reference solution
 ```
