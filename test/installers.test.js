@@ -210,3 +210,45 @@ Write-Output 'ok'
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /ok/);
 });
+
+// 2026-11-13: one "curl: (56) Recv failure: Connection reset by peer" on the Node download failed a whole install.
+function flakyCurl(f, failures, code) {
+  const dir = join(f.base, "flaky-bin");
+  mkdirSync(dir);
+  const count = join(f.base, "curl-calls");
+  writeFileSync(join(dir, "curl"), `#!/bin/sh\nn=$(cat "${count}" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "${count}"\n[ "$n" -le ${failures} ] && exit ${code}\nexec /usr/bin/curl "$@"\n`);
+  chmodSync(join(dir, "curl"), 0o755);
+  return { path: `${dir}:${dirname(process.execPath)}:/usr/bin:/bin`, calls: () => Number(readFileSync(count, "utf8")) };
+}
+
+test("install.sh tries a download again after a dropped connection, and says so", (t) => {
+  const f = fixture(t);
+  const curl = flakyCurl(f, 1, 56);
+  const r = f.run({ PATH: curl.path });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Download interrupted; trying again \(1 of 3\)/);
+  assert.ok(existsSync(join(f.bin, "steak-dsh")));
+});
+
+test("install.sh gives up after 4 tries, and at once when the server answered with an error", (t) => {
+  const always = fixture(t);
+  let curl = flakyCurl(always, 99, 56);
+  let r = always.run({ PATH: curl.path });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /download failed after 4 tries: /);
+  assert.equal(curl.calls(), 4);
+  const refused = fixture(t);
+  curl = flakyCurl(refused, 99, 22);
+  r = refused.run({ PATH: curl.path });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /download failed: /);
+  assert.equal(curl.calls(), 1, "an HTTP error is not retried");
+});
+
+test("install.ps1 retries a download and never retries a 4xx answer", () => {
+  const body = ps1.slice(ps1.indexOf("function Get-RemoteFile"), ps1.indexOf("function Get-RemoteFile") + 900);
+  assert.match(body, /for \(\$attempt = 1; ; \$attempt\+\+\)/);
+  assert.match(body, /\$attempt -ge 4 -or \(\$status -ge 400 -and \$status -lt 500\)/);
+  assert.match(body, /Start-Sleep -Seconds \(\$attempt \* 2\)/);
+  assert.match(body, /\$failure = \$_/, "the error is kept before the inner try can replace $_");
+});

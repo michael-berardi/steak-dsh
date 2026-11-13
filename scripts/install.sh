@@ -26,9 +26,25 @@ SHIM_MARK='steak-dsh installer shim'
 say() { printf '%s\n' "$*"; }
 die() { printf 'steak-dsh install: %s\n' "$*" >&2; exit 1; }
 
-if command -v curl >/dev/null 2>&1; then fetch() { curl -fsSL --retry 3 -o "$2" "$1" || die "download failed: $1"; }
-elif command -v wget >/dev/null 2>&1; then fetch() { wget -q -O "$2" "$1" || die "download failed: $1"; }
+# DL_FINAL lists the exit codes that another try cannot fix (the server answered with an error, or a local file is missing).
+if command -v curl >/dev/null 2>&1; then dl() { curl -fsSL --retry 3 -o "$2" "$1"; }; DL_FINAL=" 22 37 "
+elif command -v wget >/dev/null 2>&1; then dl() { wget -q -O "$2" "$1"; }; DL_FINAL=" 8 "
 else die "needs curl or wget; install one with your package manager (for example: apt-get install curl)"; fi
+# A connection that drops part-way (curl 56 "connection reset", 18 "partial file") is not retried by curl's own --retry on
+# the curl most systems ship, and one such drop used to fail the whole install. Each download gets up to 4 tries.
+fetch() {
+  fetch_n=1
+  while :; do
+    fetch_rc=0
+    dl "$1" "$2" || fetch_rc=$?
+    [ "$fetch_rc" -eq 0 ] && return 0
+    case "$DL_FINAL" in *" $fetch_rc "*) die "download failed: $1" ;; esac
+    [ "$fetch_n" -ge 4 ] && die "download failed after $fetch_n tries: $1"
+    say "Download interrupted; trying again ($fetch_n of 3)..."
+    sleep "$((fetch_n * 2))"
+    fetch_n=$((fetch_n + 1))
+  done
+}
 command -v tar >/dev/null 2>&1 || die "needs tar; install it with your package manager (for example: apt-get install tar)"
 
 if command -v sha256sum >/dev/null 2>&1; then sha256() { sha256sum "$1" | cut -d' ' -f1; }

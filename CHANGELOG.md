@@ -22,6 +22,8 @@
   `[truncated]`.
 - After a third review: `/new` in a transcript folder that stopped being private stops publishing with a notice
   instead of appending the new conversation to the old file; a start that fails after creating the file removes it.
+- The installers try a download again when the connection drops part-way (up to 4 tries, with a line saying so). One
+  dropped connection while fetching Node used to fail the whole install. An HTTP error from the server is not retried.
 - `ULTRATERM_MAIN_SCREEN=1` keeps the terminal UI on the main screen instead of the alternate screen. Without it the
   bytes written are unchanged.
 

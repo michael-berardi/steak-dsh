@@ -63,8 +63,18 @@ function Install-SteakDsh {
 
   function Get-RemoteFile {
     param([string]$Url, [string]$OutFile)
-    try { Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing }
-    catch { throw "download failed: $Url ($($_.Exception.Message))" }
+    # A dropped connection used to fail the whole install: up to 4 tries, except when the server answered 4xx.
+    for ($attempt = 1; ; $attempt++) {
+      try { Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing; return }
+      catch {
+        $failure = $_
+        $status = 0
+        try { $status = [int]$failure.Exception.Response.StatusCode } catch { $status = 0 }
+        if ($attempt -ge 4 -or ($status -ge 400 -and $status -lt 500)) { throw "download failed: $Url ($($failure.Exception.Message))" }
+        Write-Host "Download interrupted; trying again ($attempt of 3)..."
+        Start-Sleep -Seconds ($attempt * 2)
+      }
+    }
   }
 
   # Test-PathHasEntry: $true when <PathValue> (a raw, unexpanded Path) already lists <Entry>, literally or once its
