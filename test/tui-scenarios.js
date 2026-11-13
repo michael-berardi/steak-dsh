@@ -101,6 +101,16 @@ export const SCENARIOS = {
     ],
   },
 
+  // One exchange on a priced route: 2000 input, 500 output, 10000 cache read, 1000 cache write at 3/15/0.3/3.75 per million.
+  "priced-turn": {
+    price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    actions: [
+      { type: "submit", text: "hello" },
+      event({ type: "turn/start", turn: 1 }),
+      event({ type: "assistant/message", turn: 1, step: 1, stream: [], usage: { inputTokens: 2000, outputTokens: 500, cacheReadTokens: 10000, cacheWriteTokens: 1000 }, message: msg([{ type: "text", text: "Hello." }]) }),
+      event({ type: "turn/end", turn: 1, reason: { kind: "completed" } }),
+    ],
+  },
   "wide-chars": {
     actions: [
       { type: "submit", text: "日本語のテスト 🥩 éclair" },

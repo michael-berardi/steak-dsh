@@ -282,7 +282,7 @@ test("reducer: events for another session are ignored; usage and context fold; i
   s = reduce(s, ev("A", { type: "assistant/message", message: { content: [{ type: "text", text: "partial" }] }, interrupted: true, usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 50, cacheWriteTokens: 10 } }));
   assert.equal(s.phase, "stopped");
   assert.equal(s.detail, "interrupted");
-  assert.deepEqual(s.usage, { input: 100, output: 20, cacheRead: 50, cacheWrite: 10, requests: 1 });
+  assert.deepEqual(s.usage, { input: 100, output: 20, cacheRead: 50, cacheWrite: 10, requests: 1, cost: 0 });
   assert.equal(s.contextTokens, 180);
   s = reduce(s, ev("A", { type: "request/context", contextWindow: 2000 }));
   assert.equal(s.contextWindow, 2000);

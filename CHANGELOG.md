@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 - 2026-11-13
+
+- The terminal UI has room at the top: one blank row above the header and one between the header and the first
+  message. Panes under 12 rows keep the compact layout.
+- An empty session no longer shows three lines of intro text (folder and session id, "Type a message…", the key
+  list). The transcript area is empty until you send something. `/help` still lists keys and commands.
+- The status band now ends with the session's cost, like Steak Pi: tokens times the model's price in the harness's
+  model catalog, with cache reads and writes at their own rates. The `claude-code` and `openai-codex` login routes are
+  billed to your plan and show `$0.000`. A route with no known price (a gateway declared with `--base-url`) shows no
+  cost instead of a guess. `/new` resets it.
+- A message sent in the first seconds, before the harness had finished starting, failed with "send failed: SDK server
+  is not initialized". It now waits for the harness and is sent.
+
 ## 0.6.0 - 2026-11-12
 
 - New model route `openai-codex`: requests go to the Codex Responses endpoint on your ChatGPT plan, with the login the

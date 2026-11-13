@@ -1,11 +1,11 @@
+
 🥩  STEAK DSH                               / commands · /new · /compact · /exit
+
  Refine the pane layout without disturbing live sessions.
 
  ◆ read src/pane.js
 
  ⠸ running tool (esc to interrupt)
-
-
 
 
 

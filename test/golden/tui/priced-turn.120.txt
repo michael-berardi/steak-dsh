@@ -1,0 +1,30 @@
+
+🥩  STEAK DSH                                                                       / commands · /new · /compact · /exit
+
+ hello
+
+ Hello.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+◆ example-model-1 · high · ✓ complete ━━━━───────────────────────────────── ◫ 10%/131k · 13.5k tok · 77% cache · $0.020
+╰─ Message

@@ -1,6 +1,6 @@
+
 ␛[1m␛[38;2;230;57;70m🥩  ␛[39m␛[22m␛[1m␛[38;2;230;57;70mSTEAK DSH␛[39m␛[22m                               ␛[38;5;245m/ commands · /new · /compact · /exit␛[39m
-␛[48;2;22;24;29m ␛[38;5;245m5: line 5 of the file␛[39m                                                          ␛[49m
-␛[48;2;22;24;29m ␛[38;5;245m6: line 6 of the file␛[39m                                                          ␛[49m
+
 ␛[48;2;22;24;29m ␛[38;5;245m7: line 7 of the file␛[39m                                                          ␛[49m
 ␛[48;2;22;24;29m ␛[38;5;245m8: line 8 of the file␛[39m                                                          ␛[49m
 ␛[48;2;22;24;29m ␛[38;5;245m9: line 9 of the file␛[39m                                                          ␛[49m

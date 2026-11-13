@@ -1,4 +1,6 @@
+
 🥩  STEAK DSH                                                                       / commands · /new · /compact · /exit
+
  Long job.
 
  ! read src/pane.js
@@ -8,8 +10,6 @@
 
  ! harness exited with code 1 (out of memory): pending approvals and questions were refused. Send a message to restart
    the harness and resume the session.
-
-
 
 
 

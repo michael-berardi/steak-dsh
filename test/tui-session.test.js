@@ -240,3 +240,15 @@ test("quitting while a cancel is in flight leaves no child behind", async () => 
   await new Promise((r) => setTimeout(r, 100));
   for (const s of fake.starts()) assert.ok(!alive(s.start), `child ${s.start} leaked`);
 });
+
+test("a message sent while the harness is still starting waits for it instead of failing", async () => {
+  const fake = makeFakeDsh({ initialize: { delayMs: 400 }, onPrompt: [status("running"), ev({ type: "turn/start", turn: 1 }), ev({ type: "turn/end", turn: 1, reason: { kind: "completed" } }), status("idle")] });
+  const c = new Controller({ bin: fake.bin, args: ["--profile", "sdk"], options: OPTIONS, cwd: process.cwd(), env: fake.env, timing: { killGraceMs: 300, shutdownGraceMs: 1500 } });
+  const started = c.start();
+  await c.submit("hello"); // typed before initialize has answered
+  await started;
+  await until(() => fake.received("session/prompt").length === 1, "the prompt reached the harness");
+  assert.ok(!c.state.blocks.some((b) => /send failed/.test(b.text ?? "")), "no send failure is shown");
+  assert.notEqual(c.state.phase, "error");
+  await finish(c, fake);
+});

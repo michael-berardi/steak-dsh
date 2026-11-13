@@ -24,7 +24,7 @@ const CATALOG_ENTRY = "openai-codex";
  * The file behind `<package>/<group>/<entry>` for a package that only declares import targets: `require.resolve`
  * cannot follow those, so the package is found on the resolver's search path and its own export map is applied.
  */
-function importTarget(require, name, group, entry) {
+export function importTarget(require, name, group, entry) {
   for (const dir of require.resolve.paths(name) ?? []) {
     const root = join(dir, name);
     let manifest;

@@ -1,6 +1,6 @@
+
 🥩  STEAK DSH                                                                       / commands · /new · /compact · /exit
- 5: line 5 of the file
- 6: line 6 of the file
+
  7: line 7 of the file
  8: line 8 of the file
  9: line 9 of the file

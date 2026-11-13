@@ -52,7 +52,10 @@ test("the app enters the alternate screen with bracketed paste, shows the empty 
   assert.deepEqual(t.stdin.raw, [true]);
   const screen = t.text();
   assert.equal(screen.length, 24);
-  assert.match(screen[0], /^🥩  STEAK DSH +\/ commands/);
+  assert.equal(screen[0], "", "one blank row above the header");
+  assert.match(screen[1], /^🥩  STEAK DSH +\/ commands/);
+  assert.equal(screen[2], "", "one blank row under the header");
+  assert.ok(screen.slice(3, -2).every((line) => line === ""), "an empty session shows an empty transcript");
   assert.match(screen.at(-2), /^◆ example-model-1 · high · ● new session/);
   assert.equal(screen.at(-1), "╰─ Message");
   assert.deepEqual(emulateScreen(t.stdout.written, 80, 24), screen, "the bytes written to the terminal draw exactly the composed frame");
@@ -128,15 +131,15 @@ test("approval via keys: y allows once; the harness receives the decision", asyn
 test("resize: the next frame uses the new size, the screen is cleared and the header hints are width-gated", async () => {
   const t = await boot({}, { size: { columns: 120, rows: 30 } });
   assert.equal(t.app.last.length, 30);
-  assert.match(t.text()[0], /\/ commands · \/new · \/compact · \/exit$/);
+  assert.match(t.text()[1], /\/ commands · \/new · \/compact · \/exit$/);
   const before = t.stdout.written.length;
   t.stdout.columns = 38;
-  t.stdout.rows = 12;
+  t.stdout.rows = 11;
   t.stdout.emit("resize");
-  await until(() => t.app.last.length === 12, "repainted");
+  await until(() => t.app.last.length === 11, "repainted");
   assert.ok(t.stdout.written.slice(before).includes("\x1b[2J"), "cleared before the repaint");
   assert.ok(t.app.last.every((l) => visibleWidth(l) <= 38));
-  assert.equal(t.text()[0], "🥩  STEAK DSH");
+  assert.equal(t.text()[0], "🥩  STEAK DSH", "under 12 rows the header is on the first row");
   t.send("\x04");
   await t.done;
 });

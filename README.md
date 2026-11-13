@@ -61,7 +61,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.6.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.7.0
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -70,7 +70,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.6.0
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.6.0
+npm i -g github:michael-berardi/steak-dsh#v0.7.0
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -307,14 +307,14 @@ steak-dsh tui --model acme/coder-large
 steak-dsh tui --model acme/coder-large --long --owned-path "$PWD/src"
 ```
 
-Empty screen, captured from a real `dsh --profile sdk` (initialized, no prompt sent), 80 columns:
+An empty session shows only the header, the status band and the editor (frame from the test renderer, 80 columns,
+middle rows cut). From 12 rows up there is one blank row above the header and one below it:
 
 ```text
+
 🥩  STEAK DSH                               / commands · /new · /compact · /exit
- ~/work/app · session 3e76d54a
- Type a message and press enter. /help lists keys and commands.
- enter send · ctrl+j newline · esc interrupt · ctrl+o tools · ctrl+c quit
-◆ deepseek-v4-flash · ● new session
+
+◆ example-model-1 · high · ● new session ───────────────────────────── ◫ ?/131k
 ╰─ Message
 ```
 
@@ -362,9 +362,11 @@ context meter, tokens and cache share:
 ╰─ Message
 ```
 
-The band reads `◆ model · effort · state`, then a context meter and `◫ percent/window · tokens · cache share`. An
-atom with no data is left out rather than guessed: there is no cost figure, because the harness reports tokens, not
-money. States: `● ready`, `◆ thinking`, `◆ responding`, `◆ tool <name>`, `◇ waiting · <what>`, `◆ compacting`,
+The band reads `◆ model · effort · state`, then a context meter and `◫ percent/window · tokens · cache share · cost`.
+An atom with no data is left out rather than guessed. The harness reports tokens, not money, so the cost is the
+session's tokens times the model's price in the harness's own model catalog (cache reads and writes at their own
+rates). The `claude-code` and `openai-codex` login routes are billed to your plan and show `$0.000`. A route with no
+known price, such as a gateway declared with `--base-url`, shows no cost. States: `● ready`, `◆ thinking`, `◆ responding`, `◆ tool <name>`, `◇ waiting · <what>`, `◆ compacting`,
 `✓ complete`, `! error · <why>`, `! stopped · <why>`.
 
 Keys: Enter sends; Ctrl-J, Alt-Enter or a trailing `\` then Enter adds a line; Up/Down browse history at the edges;
@@ -380,7 +382,7 @@ one and resuming the same session (the SDK wire has no cancel call), which takes
 
 What it cannot match: text arrives per committed step, not token by token (the SDK wire carries committed messages
 only); the editor is keyboard-only (no IME placement, mouse or autocomplete); Markdown is minimal and code is not
-syntax-highlighted; there is no cost figure; `--add-dir` has no effect over the SDK wire; the model is fixed for the
+syntax-highlighted; a declared gateway route shows no cost; `--add-dir` has no effect over the SDK wire; the model is fixed for the
 process. `NO_COLOR`, a dumb terminal, or a pipe turns colour off; on a pipe `tui` runs in plain line mode (each stdin
 line is a message, approvals are refused).
 

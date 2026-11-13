@@ -24,7 +24,7 @@ function golden(name, actual) {
 
 function render(name, size, { mode = "none", typed = "" } = {}) {
   const scenario = SCENARIOS[name];
-  let state = base();
+  let state = scenario.price ? { ...base(), price: scenario.price } : base();
   for (const action of scenario.actions) state = reduce(state, action);
   const editor = new Editor();
   if (typed) editor.insert(typed);

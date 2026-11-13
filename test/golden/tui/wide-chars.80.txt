@@ -1,10 +1,10 @@
+
 🥩  STEAK DSH                               / commands · /new · /compact · /exit
+
  日本語のテスト 🥩 éclair
 
  こんにちは世界、これは幅の広い文字を含む長い一行で、折り返しが文字の途中で切れ
  ないことを確かめます。 Done 🥩
-
-
 
 
 
