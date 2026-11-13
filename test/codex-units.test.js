@@ -28,7 +28,7 @@ test("the module folder imports only Node built-ins or its own files, and names 
       assert.match(match[1], /^(node:|\.\/)/, `${file} imports ${match[1]}`);
     }
     assert.doesNotMatch(source, /\b(opus|sonnet|haiku|fable|qwen|gpt-[\w.]+|o[134]-|deepseek-v|openrouter|claude|anthropic)\b/i, `${file} names a model or another provider`);
-    assert.doesNotMatch(source, /fallback(?:Model|Chain|s\b)|preferred|libertydesign|berardi/i, `${file} carries a fallback chain, a preference or a name`);
+    assert.doesNotMatch(source, /fallback(?:Model|Chain|s\b)|preferred|defaultModel/i, `${file} carries a fallback chain, a preference or a default model`);
   }
 });
 

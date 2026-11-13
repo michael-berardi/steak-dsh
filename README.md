@@ -239,9 +239,10 @@ steak-dsh run --model openai-codex/<model> --effort high "task"
 ```
 
 - **No new wire code.** dsh already ships the Codex transport (the `openai-codex-responses` implementation in the LLM
-  library it bundles) but only offers it with a login kept in dsh's own store. dsh's `openai-responses` protocol with
-  extra headers cannot carry this endpoint: the path, the required `instructions` and `store: false` fields and the
-  account header differ, and a declared route takes a fixed key, not a login that expires. So the route hands each
+  library it bundles) but only offers it with a login kept in dsh's own store. A declared `openai-responses` route
+  with extra headers cannot carry this endpoint: that protocol sends the system prompt as an input message where the
+  Codex backend requires the `instructions` field, dsh refuses the Codex protocol on a declared route, and a declared
+  route takes a fixed key from the environment, not a login that expires. So the route hands each
   request to dsh's own route adapter around that transport and supplies the token. Tool calls, tool results, thinking
   and token usage are handled by dsh exactly as on its other routes. On a dsh build that does not expose the
   transport a request fails with `CODEX_HARNESS_UNSUPPORTED`.
