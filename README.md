@@ -61,7 +61,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.7.1
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.8.0
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -70,7 +70,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.7.1
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.7.1
+npm i -g github:michael-berardi/steak-dsh#v0.8.0
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -386,6 +386,29 @@ only); the editor is keyboard-only (no IME placement, mouse or autocomplete); Ma
 syntax-highlighted; a declared gateway route shows no cost; `--add-dir` has no effect over the SDK wire; the model is fixed for the
 process. `NO_COLOR`, a dumb terminal, or a pipe turns colour off; on a pipe `tui` runs in plain line mode (each stdin
 line is a message, approvals are refused).
+
+### Showing the conversation in a host app
+
+A terminal app that draws its own view of a pane can follow this TUI's conversation. It opts in with three
+environment variables; without them the TUI writes no file and behaves exactly as above.
+
+| Variable | Meaning |
+|---|---|
+| `ULTRATERM_UI_TRANSCRIPT_FILE` | absolute path of the file to write; it must end in `<ULTRATERM_UI_SESSION_ID>.jsonl` |
+| `ULTRATERM_UI_SESSION_ID` | the session id the host gave this pane |
+| `ULTRATERM_MAIN_SCREEN` | `1`: stay on the main screen (no alternate-screen switch); the cursor ends on a fresh line below the last frame |
+
+The file is a Pi-format session log: a header `{"type":"session","version":3,"id","cwd"}`, then one JSON row per line,
+append-only, each with a unique `id` and a `parentId` pointing at the previous row. Rows are your messages (slash
+commands sent to the harness included; `/help` and `/exit` are not), the assistant's text, each tool call
+(`{type:"toolCall", id, name, arguments}` with the harness's own tool name and arguments), each tool result
+(`toolCallId`, `toolName`, `isError`, text), and an assistant row with `stopReason` (`stop`, `error` or `aborted`) that
+ends each turn. Assistant rows carry token usage, with `cost.total` when the session has a price. Reasoning text is
+never written. `/new` and `/resume` replace the file atomically with a fresh header carrying the same id.
+
+The folder is created `0700` and the file `0600`; the TUI refuses a symlink at the path, a path that does not end in the
+session id, a relative path, and a folder that is not yours or is group or world writable. It then publishes nothing and
+says why in one notice. A write error later stops publishing with one notice; the conversation carries on.
 
 ## Benchmark
 

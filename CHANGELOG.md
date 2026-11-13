@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 - 2026-11-13
+
+- The terminal UI can publish its conversation for a host app to show in its own view. With `ULTRATERM_UI_TRANSCRIPT_FILE`
+  and `ULTRATERM_UI_SESSION_ID` set it writes a Pi-format session log (user messages, assistant text, tool calls and
+  results, a stop row per turn, token usage and cost); the file is `0600` in a `0700` folder, never follows a symlink,
+  and a write error stops publishing with one notice instead of interrupting the session. `/new` and `/resume` start a
+  fresh file. Without the variables nothing is written. See "Showing the conversation in a host app" in the README.
+- `ULTRATERM_MAIN_SCREEN=1` keeps the terminal UI on the main screen instead of the alternate screen. Without it the
+  bytes written are unchanged.
+
 ## 0.7.1 - 2026-11-13
 
 - Models on the `claude-code` route were offered with a 200K context window although they run with 1M: the CLI's model

@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -34,11 +36,11 @@ function fakeTty({ columns = 80, rows = 24 } = {}) {
   return { stdin, stdout };
 }
 
-async function boot(scenario, { mode = "none", size } = {}) {
+async function boot(scenario, { mode = "none", size, mainScreen } = {}) {
   const fake = makeFakeDsh(scenario);
   const { stdin, stdout } = fakeTty(size);
   const c = new Controller({ bin: fake.bin, args: ["--profile", "sdk"], options: OPTIONS, cwd: process.cwd(), env: fake.env, timing: { killGraceMs: 300, shutdownGraceMs: 1500 } });
-  const app = new TerminalApp({ controller: c, stdin, stdout, theme: createTheme({ mode }) });
+  const app = new TerminalApp({ controller: c, stdin, stdout, theme: createTheme({ mode }), mainScreen });
   const done = app.run();
   await until(() => c.state.childAlive && c.state.phase === "ready" && c.child && fake.received("initialize").length > 0, "ready");
   const text = () => app.last.map((l) => stripAnsi(l).trimEnd());
@@ -228,4 +230,61 @@ test("tuiCommand with a TTY pair runs the full-screen app", async () => {
   stdin.write("\x04");
   assert.equal(await run1, 0);
   assert.ok(!alive(fake.starts()[0].start));
+});
+
+test("default mode writes the alternate-screen sequences exactly once each, in the same bytes as before", async () => {
+  const t = await boot({});
+  t.send("\x04");
+  await t.done;
+  assert.equal(t.stdout.written.split("\x1b[?1049h").length - 1, 1);
+  assert.equal(t.stdout.written.split("\x1b[?1049l").length - 1, 1);
+  assert.ok(t.stdout.written.startsWith("\x1b[?1049h\x1b[?2004h\x1b[2J"));
+  assert.ok(t.stdout.written.endsWith("\x1b[?2004l\x1b[?25h\x1b[?1049l"));
+});
+
+test("main-screen mode never enters or leaves the alternate screen, keeps paste and raw mode, and leaves a fresh line below the frame", async () => {
+  const t = await boot({}, { mainScreen: true });
+  try {
+    assert.ok(t.stdout.written.startsWith("\x1b[?2004h\x1b[2J"), "bracketed paste on, viewport cleared, no alternate screen");
+    assert.deepEqual(t.stdin.raw, [true]);
+    assert.deepEqual(emulateScreen(t.stdout.written, 80, 24), t.text(), "the frame is drawn the same");
+  } finally {
+    t.send("\x04");
+  }
+  assert.equal(await t.done, 0);
+  assert.ok(!t.stdout.written.includes("\x1b[?1049h"));
+  assert.ok(!t.stdout.written.includes("\x1b[?1049l"));
+  assert.deepEqual(t.stdin.raw, [true, false]);
+  assert.ok(t.stdout.written.endsWith("\x1b[?2004l\x1b[?25h\x1b[24;1H\r\n"), "paste off, cursor shown, cursor on a new line below the last frame row");
+});
+
+test("main-screen mode still redraws on resize", async () => {
+  const t = await boot({}, { mainScreen: true });
+  const before = t.stdout.written.length;
+  t.stdout.rows = 20;
+  t.stdout.emit("resize");
+  try {
+    await until(() => t.stdout.written.length > before && t.stdout.written.slice(before).includes("\x1b[2J"), "resize clear");
+  } finally {
+    t.send("\x04");
+  }
+  await t.done;
+  assert.ok(!t.stdout.written.includes("\x1b[?1049"));
+});
+
+test("tuiCommand reads the host variables: main screen, and a transcript file with a header", async () => {
+  const fake = makeFakeDsh({});
+  const { stdin, stdout } = fakeTty();
+  const dir = mkdtempSync(join(tmpdir(), "steak-dsh-host-"));
+  const id = "7d1c2a3b-0000-4000-8000-0000000000aa";
+  const file = join(dir, "ui-transcripts", `${id}.jsonl`);
+  const env = { ...fake.env, NO_COLOR: "1", ULTRATERM_MAIN_SCREEN: "1", ULTRATERM_UI_TRANSCRIPT_FILE: file, ULTRATERM_UI_SESSION_ID: id };
+  const run1 = tuiCommand({ ...OPTIONS, stock: true }, { root, bin: fake.bin, stdin, stdout, env });
+  await until(() => stdout.written.includes("STEAK DSH"), "screen drawn");
+  stdin.write("\x04");
+  assert.equal(await run1, 0);
+  assert.ok(!stdout.written.includes("\x1b[?1049"));
+  const [header, ...rest] = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(header, { type: "session", version: 3, id, cwd: process.cwd() });
+  assert.deepEqual(rest, []);
 });
