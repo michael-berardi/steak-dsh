@@ -15,6 +15,11 @@
   file; a write error appends one final `error` row, and `/new` resumes publishing; each text field is cut at
   262144 characters; tool arguments with `file_path` also carry `path`. The README now says the file holds full tool
   arguments and results, gives the host manifest snippet, and names the stop reasons (`stop`, `error`, `aborted`).
+- After a second review of that file: a publisher whose start was refused (the file already existed) no longer
+  replaces the file on `/new`, and `/new` leaves a foreign file at the path alone; a write that stops part-way is
+  rolled back so no partial line stays; a failed `/new` keeps row ids unique; a cut never splits a character and a
+  lone surrogate is never written; a row over 4 MiB is written with its texts and tool arguments replaced by
+  `[truncated]`.
 - `ULTRATERM_MAIN_SCREEN=1` keeps the terminal UI on the main screen instead of the alternate screen. Without it the
   bytes written are unchanged.
 

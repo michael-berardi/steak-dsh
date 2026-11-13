@@ -409,8 +409,10 @@ assistant's text, each tool call (`{type:"toolCall", id, name, arguments}`), eac
 arguments and results**: file contents written or read, command lines (which can contain secrets typed inline), and
 whatever a tool printed. Assistant rows carry token usage, with `cost.total` when the session has a price. Reasoning
 text is never written. Diffs are not published: an edit shows its arguments and its result text, not a diff. Each
-text field (a message, one tool argument string, one tool result) is cut at 262144 characters and ends with
-`\n[truncated]`.
+text field (a message, one tool argument string, one tool result) is cut at 262144 UTF-16 code units, never inside a
+character, and ends with `\n[truncated]`. A row that would still be longer than 4 MiB is written with its texts and
+tool arguments replaced by `[truncated]`. A write that stops part-way is rolled back, so the file never holds a partial
+line. A file that already exists at start is refused and is not replaced later by `/new`.
 
 - Tool arguments are the harness's own object, unchanged. When it has a `file_path` string, a `path` key with the
   same value is added, because hosts read `path`; `command` is read as it is.

@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rmSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { rmSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Controller } from "../lib/tui/session.js";
-import { MAX_TEXT, transcriptFromEnv } from "../lib/tui/transcript-publisher.js";
+import { MAX_ROW, MAX_TEXT, transcriptFromEnv } from "../lib/tui/transcript-publisher.js";
 import { launchEnv } from "../lib/dsh.js";
 import { tuiCommand } from "../lib/tui/index.js";
 import { Readable, Writable } from "node:stream";
@@ -490,4 +490,117 @@ test("M2: only the three stop reasons stop, error and aborted are ever published
   await t.turn("go");
   await t.c.quit();
   for (const r of t.rows().slice(1)) if (r.message.stopReason !== undefined) assert.ok(["stop", "error", "aborted"].includes(r.message.stopReason));
+});
+
+// Round 2 review (2026-11-13).
+test("N1: a publisher whose start was refused never replaces the file on /new", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("hi");
+  const before = readFileSync(t.file);
+  const ino = statSync(t.file).ino;
+  const second = transcriptFromEnv({ ULTRATERM_UI_TRANSCRIPT_FILE: t.file, ULTRATERM_UI_SESSION_ID: t.id }, { cwd: t.cwd });
+  assert.equal(second.start(() => {}), false);
+  second.observe({ type: "newSession" }, {}, {});
+  second.restart();
+  assert.deepEqual(readFileSync(t.file), before);
+  assert.equal(statSync(t.file).ino, ino);
+  assert.deepEqual(readdirSync(t.dir), [`${t.id}.jsonl`]);
+  assert.equal(second.active, false);
+  await t.c.quit();
+  // Someone else's file named by the variables: refused at start and still untouched after /new.
+  const home = mkdtempSync(join(tmpdir(), "steak-dsh-n1-"));
+  const id = randomUUID();
+  const file = join(home, `${id}.jsonl`);
+  writeFileSync(file, "precious\n");
+  const p = transcriptFromEnv({ ULTRATERM_UI_TRANSCRIPT_FILE: file, ULTRATERM_UI_SESSION_ID: id }, { cwd: home });
+  assert.equal(p.start(() => {}), false);
+  p.observe({ type: "newSession" }, {}, {});
+  assert.equal(readFileSync(file, "utf8"), "precious\n");
+  rmSync(home, { recursive: true });
+});
+
+test("N1: /new does not replace a foreign file that took the transcript's place", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("first");
+  rmSync(t.file);
+  writeFileSync(t.file, "foreign line\n");
+  await t.turn("second");
+  await t.c.submit("/new");
+  await t.turn("third");
+  assert.equal(readFileSync(t.file, "utf8"), "foreign line\n");
+  assert.deepEqual(readdirSync(t.dir), [`${t.id}.jsonl`]);
+  await t.c.quit();
+});
+
+test("N2: a write that stops part-way leaves no partial line; every line still parses", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("first");
+  const good = t.rows().length;
+  const publisher = t.c.publisher;
+  let armed = true;
+  publisher.write = (fd, bytes, offset, length) => {
+    if (!armed) return writeSync(fd, bytes, offset, length);
+    armed = false;
+    writeSync(fd, bytes, offset, Math.floor(length / 2));
+    const e = new Error("disk full"); e.code = "ENOSPC"; throw e;
+  };
+  await t.turn("second");
+  const text = readFileSync(t.file, "utf8");
+  assert.ok(text.endsWith("\n"));
+  const rows = text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(rows.length, good + 1, "the half-written row is gone; one final row follows");
+  assert.equal(rows.at(-1).message.stopReason, "error");
+  normalise(rows.slice(1));
+  // A write that reports fewer bytes without failing is finished by the loop.
+  await t.c.submit("/new");
+  publisher.write = (fd, bytes, offset, length) => writeSync(fd, bytes, offset, Math.min(length, 7));
+  await t.turn("after new");
+  assert.equal(t.rows()[1].message.content[0].text, "after new");
+  assert.equal(t.rows().length, 4);
+  await t.c.quit();
+});
+
+test("N3: a failed /new keeps the old file's row ids unique and chained", async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("first");
+  const good = t.rows().length;
+  const publisher = t.c.publisher;
+  publisher.tmpSuffix = () => "collide";
+  writeFileSync(`${t.file}.collide.tmp`, "foreign temp");
+  await t.c.submit("/new");
+  const rows = t.rows();
+  assert.equal(rows.length, good + 1);
+  assert.equal(rows.at(-1).message.stopReason, "error");
+  normalise(rows.slice(1));
+  await t.c.quit();
+});
+
+test("N4: a cut never splits a character, a lone surrogate is never published, and an oversized row is slimmed", async () => {
+  const astral = "a".repeat(MAX_TEXT - 1) + "\u{1F600}" + "tail";
+  const many = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`k${i}`, "b".repeat(MAX_TEXT)]));
+  const turn = [status("running"), ev({ type: "turn/start", turn: 1 }),
+    ev({ type: "assistant/message", turn: 1, step: 1, stream: [], message: textMsg("lone \ud83d here") }),
+    call(1, 1, "w1", "write", { file_path: "a.txt", ...many }),
+    ev({ type: "tool/result", turn: 1, step: 1, message: toolResult("w1", "ok") }),
+    ev({ type: "turn/end", turn: 1, reason: { kind: "completed" } }), status("idle")];
+  const t = rig({ onPrompt: turn });
+  await t.c.start();
+  await t.turn(astral);
+  await t.c.quit();
+  const raw = readFileSync(t.file, "utf8");
+  assert.ok(!/\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f])/i.test(raw), "no lone high surrogate escape in the file");
+  const lines = raw.split("\n").filter(Boolean);
+  for (const line of lines) assert.ok(Buffer.byteLength(line, "utf8") <= MAX_ROW, "every line is within the row limit");
+  const rows = lines.map((line) => JSON.parse(line)).slice(1);
+  assert.equal(rows[0].message.content[0].text, "a".repeat(MAX_TEXT - 1) + "\n[truncated]", "cut before the character, not inside it");
+  assert.ok(rows[1].message.content[0].text.isWellFormed());
+  const toolCall = rows[2].message.content[0];
+  assert.equal(toolCall.type, "toolCall");
+  assert.equal(toolCall.id, "w1");
+  assert.deepEqual(toolCall.arguments, { input: "[truncated]" });
+  normalise(rows);
 });
