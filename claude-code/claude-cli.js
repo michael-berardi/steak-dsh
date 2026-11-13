@@ -236,7 +236,7 @@ export async function discoverClaudeModels(
   timeoutMs = 20_000,
 ) {
   signal?.throwIfAborted();
-  const env = processEnvironment(envInput, {});
+  const env = discoveryEnvironment(envInput);
   const command = await resolveClaudeExecutable(env);
   if (!command) throw new ClaudeCodeError(INSTALL_HINT, CODES.NOT_READY);
 
@@ -502,6 +502,20 @@ export function processEnvironment(
     DISABLE_ERROR_REPORTING: "1",
   });
   if (typeof extraBody.max_tokens === "number") env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(extraBody.max_tokens);
+  return env;
+}
+
+/**
+ * The environment for model discovery only: the request environment without the two switches that make the CLI skip
+ * its live model catalog. With CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC or DISABLE_TELEMETRY set, the CLI answers the
+ * initialize request from a short built-in list (5 rows instead of the login's 14, measured on CLI 2.1.322), so newer
+ * models the login can use were not offered. Discovery sends no prompt, so the catalog fetch costs nothing on the
+ * plan; requests keep the full quiet environment.
+ */
+export function discoveryEnvironment(input) {
+  const env = processEnvironment(input, {});
+  delete env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
+  delete env.DISABLE_TELEMETRY;
   return env;
 }
 
