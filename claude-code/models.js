@@ -6,10 +6,21 @@
 const DEFAULT_CONTEXT = 200_000;
 const LARGE_CONTEXT = 1_000_000;
 
-/** The CLI's catalog row, reduced to what the route uses. */
+/**
+ * The id a row is offered under: the full model id the CLI says the row resolves to (without the context suffix),
+ * so the same model has the same id wherever it is listed. The CLI's default row keeps its own name, and a row
+ * the CLI does not resolve keeps the value the CLI gave it.
+ */
+export function offeredId(row) {
+  if (row.value === "default" || typeof row.resolvedModel !== "string" || !row.resolvedModel) return row.value;
+  return row.resolvedModel.replace(/\[1m\]$/u, "");
+}
+
+/** The CLI's catalog row, reduced to what the route uses. `native` is what the CLI itself calls the row. */
 export function normalizeRow(row) {
   return {
-    id: row.value,
+    id: offeredId(row),
+    native: row.value,
     name: row.displayName,
     description: row.description,
     contextWindow: Number.isInteger(row.contextWindow) && row.contextWindow > 0

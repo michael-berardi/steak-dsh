@@ -31,6 +31,14 @@ test("G1: models are discovered from the CLI, not listed in the module", async (
   assert.deepEqual((await custom.adapter.listModels("claude-code")).map((m) => m.id), ["row-a"]);
 });
 
+test("G1: a listed id is the full model id, and the request reaches the CLI under the CLI's own name for the row", async () => {
+  const catalog = JSON.stringify([{ value: "large", displayName: "Large", description: "x", resolvedModel: "vendor-large-9" }]);
+  const { adapter, log } = makeAdapter(dir(), { FAKE_CLAUDE_CATALOG: catalog });
+  assert.deepEqual((await adapter.listModels("claude-code")).map((m) => m.id), ["vendor-large-9"]);
+  await collect(adapter, request([user("hi")], { model: "vendor-large-9" }));
+  assert.deepEqual(readLog(log).filter((e) => e.event === "launch" && !e.discovery).map((e) => e.model), ["large"]);
+});
+
 test("G1: exact-route metadata carries context size and effort levels from the CLI row", async () => {
   const { adapter } = makeAdapter(dir());
   const info = await adapter.resolveModel("claude-code", "default");

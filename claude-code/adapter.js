@@ -104,7 +104,7 @@ export function createClaudeCodeAdapter(harness, { env = () => process.env, time
         translator = new EventTranslator(prepared.names, harness.ToolCallId);
         const row = this.catalog?.rows.find((candidate) => candidate.id === options.model);
         request = {
-          model: options.model,
+          model: row?.native ?? options.model, // a listed id goes to the CLI under the CLI's own name for the row
           cwd: process.cwd(),
           frames,
           systemPrompt: systemPromptText(options),

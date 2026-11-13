@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { loadHarness } from "../claude-code/harness.js";
 import { capCacheBreakpoints, MAX_CACHE_BREAKPOINTS } from "../claude-code/cache-control.js";
 import { claudeToolName, harnessToolName, TOOL_PREFIX } from "../claude-code/tool-names.js";
-import { normalizeRow, rowsFromDiscovery, resolvedModel } from "../claude-code/models.js";
+import { normalizeRow, offeredId, rowsFromDiscovery, resolvedModel } from "../claude-code/models.js";
 import { EventTranslator, mapStopReason, mapUsage, normalizeErrorMessage } from "../claude-code/stream.js";
 import { normalizeInputSchema, prepareFrames, prepareTools, systemPromptText } from "../claude-code/transcript.js";
 import { transportTimeout, waitForOperation, ClaudeWaitLimitError } from "../claude-code/wait.js";
@@ -232,4 +232,16 @@ test("model discovery lets the CLI fetch its live catalog; requests stay quiet",
   assert.equal(request.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
   assert.equal(request.DISABLE_TELEMETRY, "1");
   assert.throws(() => discoveryEnvironment({ ANTHROPIC_API_KEY: "x" }), /refuses conflicting auth/);
+});
+
+test("catalog rows are offered under the full id the CLI resolves them to, and go back to the CLI under its own name", () => {
+  assert.equal(offeredId({ value: "default", resolvedModel: "vendor-large-9" }), "default");
+  assert.equal(offeredId({ value: "large", resolvedModel: "vendor-large-9[1m]" }), "vendor-large-9");
+  assert.equal(offeredId({ value: "row-a" }), "row-a");
+  const rows = rowsFromDiscovery([
+    { value: "default", displayName: "Default", description: "", resolvedModel: "vendor-large-9" },
+    { value: "large", displayName: "Large", description: "", resolvedModel: "vendor-large-9" },
+    { value: "large[1m]", displayName: "Large 1M", description: "", resolvedModel: "vendor-large-9[1m]" },
+  ]);
+  assert.deepEqual(rows.map((row) => [row.id, row.native]), [["default", "default"], ["vendor-large-9", "large"]], "one id per model: the first row the CLI gives wins");
 });
