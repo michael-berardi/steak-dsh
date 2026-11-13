@@ -20,6 +20,8 @@
   rolled back so no partial line stays; a failed `/new` keeps row ids unique; a cut never splits a character and a
   lone surrogate is never written; a row over 4 MiB is written with its texts and tool arguments replaced by
   `[truncated]`.
+- After a third review: `/new` in a transcript folder that stopped being private stops publishing with a notice
+  instead of appending the new conversation to the old file; a start that fails after creating the file removes it.
 - `ULTRATERM_MAIN_SCREEN=1` keeps the terminal UI on the main screen instead of the alternate screen. Without it the
   bytes written are unchanged.
 

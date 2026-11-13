@@ -604,3 +604,38 @@ test("N4: a cut never splits a character, a lone surrogate is never published, a
   assert.deepEqual(toolCall.arguments, { input: "[truncated]" });
   normalise(rows);
 });
+
+// Round 3 review (2026-11-13).
+test("R3: /new in a folder that stopped being private stops publishing with a notice", { skip: isRoot && "root ignores file modes" }, async () => {
+  const t = rig({ onPrompt: SHORT_TURN });
+  await t.c.start();
+  await t.turn("first");
+  const good = t.rows().length;
+  chmodSync(t.dir, 0o770);
+  await t.c.submit("/new");
+  await t.turn("second");
+  chmodSync(t.dir, 0o700);
+  const rows = t.rows();
+  assert.equal(rows.length, good + 1, "one final row; the new conversation is not appended to the old file");
+  assert.equal(rows.at(-1).message.stopReason, "error");
+  assert.ok(!JSON.stringify(rows).includes("second"));
+  assert.equal(t.notices().length, 1);
+  await t.c.quit();
+});
+
+test("R4: a start that fails after creating the file leaves no file behind", () => {
+  const home = mkdtempSync(join(tmpdir(), "steak-dsh-r4-"));
+  const id = randomUUID();
+  const dir = join(home, "ui-transcripts");
+  mkdirSync(dir, { mode: 0o700 });
+  const file = join(dir, `${id}.jsonl`);
+  const p = transcriptFromEnv({ ULTRATERM_UI_TRANSCRIPT_FILE: file, ULTRATERM_UI_SESSION_ID: id }, { cwd: home });
+  p.write = () => { const e = new Error("disk full"); e.code = "ENOSPC"; throw e; };
+  const notes = [];
+  assert.equal(p.start((x) => notes.push(x)), false);
+  assert.equal(notes.length, 1);
+  assert.deepEqual(readdirSync(dir), []);
+  p.observe({ type: "newSession" }, {}, {});
+  assert.deepEqual(readdirSync(dir), [], "and a later /new does not publish either");
+  rmSync(home, { recursive: true });
+});
