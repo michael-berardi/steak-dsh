@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `codex-bridge/bridge.mjs`: runs the stock Codex CLI on your Claude Code subscription login, through the same
+  `claude-code/` module as the `claude-code` route. A loopback Responses endpoint translates Codex's requests (function
+  tools, tool results, native-message replay through the reasoning item) and reports cache reads and writes the way
+  Codex reads them. See "Codex CLI on the Claude Code route" in the README.
+
 ## 0.8.0 - 2026-11-13
 
 - The terminal UI can publish its conversation for a host app to show in its own view. With `ULTRATERM_UI_TRANSCRIPT_FILE`

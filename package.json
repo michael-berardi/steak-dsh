@@ -29,6 +29,7 @@
     "plugins",
     "claude-code",
     "codex",
+    "codex-bridge",
     "bin",
     "lib",
     "cordis.patch.yml",

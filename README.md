@@ -272,6 +272,32 @@ needs, and the list request must name a version; the route asks as the newest cl
 variable asks as a specific one (`0.150.0`). Switch the route off from your profile patch with
 `- id: steak-codex-route` and `disabled: true`.
 
+## Codex CLI on the Claude Code route
+
+`codex-bridge/bridge.mjs` runs the stock Codex CLI on your Claude Code subscription login, through the same
+`claude-code/` module the Claude Code route uses. It is a small loopback endpoint that speaks the Responses protocol
+Codex sends; each request goes to Claude Code exactly as a steak-dsh request on `claude-code/<model>` would.
+
+```sh
+CODEX_HOME=/tmp/codex-on-claude \
+  node codex-bridge/bridge.mjs exec --model <model> --effort medium -- codex exec --json --skip-git-repo-check "task"
+```
+
+- **Codex is unchanged.** Codex keeps its prompts, its tools, its sandbox and the conversation. The bridge only
+  generates. It writes `CODEX_HOME/config.toml` (use a private folder: that file is overwritten) so Codex's model
+  provider points at a random loopback port, runs the command, and exits with the command's exit code.
+- **Tools.** Codex's function tools are offered by name. Its namespaced tools (sub-agents) and hosted tools (web
+  search) have no Claude Code counterpart and are not offered; the bridge names them on stderr.
+- **Replay.** Each response starts with a reasoning item whose `encrypted_content` carries the native Claude message,
+  signed thinking included. Codex sends it back with the next request, so the transcript replays exactly.
+- **Usage.** `input_tokens` counts all input; `cached_tokens` is the cache read and `cache_write_tokens` the cache
+  write, which Codex reports as `cached_input_tokens` and `cache_write_input_tokens`.
+- **Billing.** The same as the Claude Code route: credentials stay with Claude Code, conflicting API-key and backend
+  variables are refused, and a turn charged to usage credits fails unless `STEAK_DSH_CLAUDE_CODE_ALLOW_USAGE_CREDITS=1`.
+  `CODEX_BRIDGE_CLAUDE_COMMAND` names the `claude` executable.
+
+ParetoBench uses the bridge for its `codex` arm on a Claude Code subscription model.
+
 ## Listing models
 
 ```sh
