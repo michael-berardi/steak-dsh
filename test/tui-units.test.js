@@ -426,3 +426,16 @@ test("question prompt: single, multi-select, custom text, several questions, dis
   const approvalIntent = questionPrompt({ questions: [{ id: "i", question: "?", intent: { kind: "approval", approve: "Yes", reject: "No" } }] }, 1);
   assert.deepEqual(promptKey(approvalIntent, key("enter")).result, { answers: [{ id: "i", selected: ["Yes"] }] });
 });
+
+
+test("a finish-guard push is shown as one notice; other inserted messages are not", () => {
+  const start = initialState({ model: "p/m", sessionId: "s1", cwd: "/w" });
+  const push = (inserted) => reduce(start, { type: "notification", method: "session.event", params: { sessionId: "s1", event: { type: "agent/inbox/spliced", data: { target: "next-step", inserted } } } });
+  const guard = { role: "user", content: [{ type: "text", text: "FINISH GUARD: keep going.\nOpen todo items:\n- [pending] write the parser\n- [in_progress] add tests" }], source: { kind: "steak-finish-guard", form: "notice", summary: "finish guard push 1/3" } };
+  const shown = push([guard]).blocks.filter((block) => block.kind === "notice").map((block) => block.text);
+  assert.deepEqual(shown, ["finish guard push 1/3: the turn was about to end with 2 open todo items; the agent was told to keep going"]);
+  const phrase = { ...guard, content: [{ type: "text", text: "FINISH GUARD: your reply reports unfinished work." }], source: { ...guard.source, summary: "finish guard push 2/3" } };
+  assert.match(push([phrase]).blocks.at(-1).text, /^finish guard push 2\/3: the turn was about to end with unfinished work reported/);
+  assert.equal(push([{ role: "user", content: [{ type: "text", text: "typed by the user" }] }]).blocks.length, start.blocks.length);
+});
+

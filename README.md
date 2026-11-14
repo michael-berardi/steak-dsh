@@ -61,7 +61,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.1
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -70,7 +70,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.0
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.10.0
+npm i -g github:michael-berardi/steak-dsh#v0.10.1
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -84,7 +84,7 @@ steak-dsh run "fix the failing test in src/parser"
 | Working rules | Six lines in the system prompt: batch independent tool calls, gather context once, compute on large files instead of reading them, check a change once, finish every part, keep the reply short. | on |
 | Verify after edit | After a file edit, runs your project's check command and hands a failure straight back to the model with the edit result. After two failures in a row it pauses until your next request. | on, does nothing until you set a command |
 | Owned paths | Refuses file edits outside the paths a task owns. Symlinks are resolved first. | per run, `--owned-path` |
-| Finish guard | Keeps the turn open when the todo list has open items or the reply reports unfinished work, at most 3 times. Leaves subagent children alone. It costs no tool text. | on |
+| Finish guard | A turn cannot end while the todo list has open items or the reply reports unfinished work: the agent is told to keep going, at most 3 times per message, and the terminal UI shows a one-line notice each time. It reads the harness's own `todo_write` list, works the same in `run`, `chat` and `tui`, stands down for a question or an explicit hold, and leaves subagent children alone. Off with `STEAK_DSH_FINISH_GUARD=0` | on |
 | Approval-never refusal | With approval policy `never`, a call that asks for a wider sandbox is refused before it runs, and the reason names the preset that would allow it. The harness alone would answer "the user rejected" though nobody was asked. Every other call passes through. | on, acts only under `never` |
 | `more_tools` | One short tool (about 250 bytes on the first request). When the model calls it, the subagent tool, its follow-up tool and the working-directory switch are switched on and are in the next request, and the spill budget is raised so an oversized tool result stays readable by path. Goal and workflow tools stay off. | on |
 

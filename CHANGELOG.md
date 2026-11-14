@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.1 - 2026-11-14
+
+- The finish guard is checked against the harness's own todo tool. A test runs the real harness with a scripted model
+  that calls `todo_write` with an open item and then stops: the guard keeps the turn open three times and then lets it
+  end, and a completed list ends at once. It behaves the same in `run`, `chat` and `tui`.
+- The terminal UI says when the guard pushes: one line such as `finish guard push 1/3: the turn was about to end with
+  2 open todo items; the agent was told to keep going`. Before, the agent just seemed to carry on.
+- The guard recognises more wordings of unfinished work, reads a reply whose content is a plain string, stands down for
+  a question-only request or an explicit hold, and no longer treats any mention of "approval" in a blocked item's
+  reason as a real outside blocker.
+- `STEAK_DSH_FINISH_GUARD=0` turns the guard off without editing a patch file.
+
 ## 0.10.0
 
 - The default permission changed from `workspace-write` to `danger-full-access`: commands run without a sandbox or approval prompts. Use `--permission workspace-write` for the old behaviour.

@@ -16,7 +16,7 @@ const DEFAULT_MESSAGE =
   "You are about to end the turn with requested work still open. Do not stop. Keep working until every item is done and verified. "
   + "Only a real external blocker may remain: then ask for exactly that one thing, with everything else finished.";
 const SCAN_LIMIT = 32_000;
-const EXTERNAL_BLOCKER = /\b(?:2fa|two[- ]factor|otp|verification code|credential|password|api key|token expired|log ?in|sign[- ]in|payment|billing|spend|legal|sign-?off|approval|consent|physical|hardware)\b/i;
+const EXTERNAL_BLOCKER = /\b(?:2fa|two[- ]factor|otp|verification code|credential|password|api key|token expired|log ?in|sign[- ]in|payment|billing|spend|legal sign-?off|operator approval|spend approval|approval card|consent|physical|hardware)\b/i;
 const OPEN_WORK = [
   /\bstill (?:not done|open|to do|left|pending|failing|unfixed|unresolved|broken)\b/i,
   /\bnot (?:done|fixed|finished|resolved|shipped|verified) yet\b/i,
@@ -27,6 +27,7 @@ const OPEN_WORK = [
   /\bnext (?:step|i'?ll|i will)\b/i,
   /(?:^|\n)\W*next\W*:\W*(?:i'?ll|i will|i'?m)\b/i,
   /\b(?:i'?m|i am) (?:fixing|working on|finishing|building|adding|shipping) (?:it|that|this|them) now\b/i,
+  /\b(?:gap|issue|bug|part) (?:i'?m|i am) (?:fixing|working on|finishing) now\b/i,
   /\bstill needs? (?:a |the |an )?(?:test|tests|build|release|fix|review|deploy|install|verification)\b/i,
   /\b(?:haven'?t|have not|didn'?t|did not) (?:published|publish|released|release|deployed|deploy|installed|install|built|build|tested|test|merged|merge|pushed|push)\b/i,
   /\bnot (?:published|released|deployed|installed|built|tested|merged|pushed) yet\b/i,
@@ -62,7 +63,10 @@ export function finishVerdict({ todos, finalText, userText, pushes, maxPushes = 
   const open = openTodos(todos);
   const phrases = openWorkPhrases(finalText);
   if (!open.length && !phrases.length) return { block: false, reason: "nothing open" };
-  if (USER_STOP.test(userText ?? "")) return { block: false, reason: "user asked to stop or only answer" };
+  const request = (userText ?? "").replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+  const questionOnly = /^(?:what|why|how|when|where|who|which|is|are|does|do|can|could|would|should|explain|describe|tell me)\b/i.test(request)
+    && /\?\s*$/.test(request) && !/\b(?:fix|implement|change|edit|build|run|add|remove|write|update|test)\b/i.test(request);
+  if (USER_STOP.test(request) || /\bHOLD\b/.test(request) || questionOnly) return { block: false, reason: "user asked to stop or only answer" };
   const lines = [`${MARK}: ${message}`];
   if (open.length) {
     lines.push("Open todo items:");
@@ -72,7 +76,7 @@ export function finishVerdict({ todos, finalText, userText, pushes, maxPushes = 
   return { block: true, reason: lines.join("\n") };
 }
 
-const textOf = (content) => (Array.isArray(content) ? content.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "");
+const textOf = (content) => (typeof content === "string" ? content : Array.isArray(content) ? content.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "");
 
 /** Walk the session log backwards through the current turn: final reply, the user's request, latest todo list. */
 export function readTurn(session, turn) {
