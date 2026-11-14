@@ -392,7 +392,11 @@ test("approval prompt: only an explicit allow permits; Esc, n and Ctrl-C reject;
   assert.deepEqual(promptKey(p, key("c", { ctrl: true })).result, { outcome: "rejected" });
   assert.deepEqual(promptKey(p, { type: "text", text: "n" }).result, { outcome: "rejected" });
   const down = promptKey(p, key("down")).prompt;
-  assert.deepEqual(promptKey(down, key("enter")).result, { outcome: "rejected" });
+  assert.deepEqual(promptKey(down, key("enter")), { result: { outcome: "allowed-once" }, remember: true }, "second row is Allow for this session");
+  const down2 = promptKey(down, key("down")).prompt;
+  assert.deepEqual(promptKey(down2, key("enter")).result, { outcome: "rejected" });
+  assert.deepEqual(promptKey(p, { type: "text", text: "a" }), { result: { outcome: "allowed-once" }, remember: true });
+  assert.equal(promptKey(p, { type: "text", text: "y" }).remember, undefined, "y allows once only");
 });
 
 test("question prompt: single, multi-select, custom text, several questions, dismissal", () => {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -287,4 +287,5 @@ test("tuiCommand reads the host variables: main screen, and a transcript file wi
   const [header, ...rest] = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   assert.deepEqual(header, { type: "session", version: 3, id, cwd: process.cwd() });
   assert.deepEqual(rest, []);
+  rmSync(dir, { recursive: true, force: true });
 });

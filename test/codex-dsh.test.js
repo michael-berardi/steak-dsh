@@ -147,7 +147,7 @@ test("dsh headless --patch: a model on the route answers a task, a tool call is 
   const fake = await backend({ replies: [toolEvents("write", { file_path: target, content: "written by the harness\n" }), textEvents("created")] });
   const seam = join(dir, "seam.yml");
   writeFileSync(seam, JSON.stringify([{ id: "steak-codex-route", config: { baseUrl: fake.baseUrl, tokenUrl: fake.tokenUrl, home: dir } }]));
-  const result = await run(["run", "--json", "--patch", seam, "--model", `${PROVIDER_ID}/row-a`, "create the file"], work, { PATH: process.env.PATH, HOME: process.env.HOME, DSH_HOME: process.env.DSH_HOME });
+  const result = await run(["run", "--json", "--patch", seam, "--model", `${PROVIDER_ID}/row-a`, "create the file"], work, { PATH: process.env.PATH, HOME: process.env.HOME, DSH_HOME: join(dir, ".dsh-home") });
   assert.equal(result.status, 0, result.stderr + result.stdout.slice(-800));
   const events = result.stdout.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l));
   const final = events.find((e) => e.type === "final");

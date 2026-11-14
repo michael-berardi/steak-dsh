@@ -38,9 +38,23 @@ const SHORT_TURN = [
   ev({ type: "turn/end", turn: 1, reason: { kind: "completed" } }), status("idle"),
 ];
 
+/** Temp folders removed when the test process exits (made writable again first: some tests lock folders). */
+const tempHomes = new Set();
+process.once("exit", () => {
+  for (const dir of tempHomes) {
+    try { chmodSync(dir, 0o700); } catch { /* already gone */ }
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
+function tempHome(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempHomes.add(dir);
+  return dir;
+}
+
 /** A fresh fake home with the contract's folder layout and a controller wired to a publisher. */
 function rig(scenario, { env = {}, prepare, publish = true, options = OPTIONS } = {}) {
-  const home = mkdtempSync(join(tmpdir(), "steak-dsh-pub-"));
+  const home = tempHome("steak-dsh-pub-");
   const cwd = join(home, "work");
   mkdirSync(cwd);
   const id = randomUUID();
@@ -229,7 +243,7 @@ test("a failed turn ends with stopReason error and its message; a cancelled one 
 });
 
 test("with the variables unset nothing is written anywhere", async () => {
-  const home = mkdtempSync(join(tmpdir(), "steak-dsh-none-"));
+  const home = tempHome("steak-dsh-none-");
   assert.equal(transcriptFromEnv({}, { cwd: home }), undefined);
   assert.equal(transcriptFromEnv({ ULTRATERM_UI_TRANSCRIPT_FILE: "", ULTRATERM_UI_SESSION_ID: "" }, { cwd: home }), undefined);
   // A real publisher path: the rig's transcript path exists nowhere, the variables are unset, and a controller is
@@ -258,7 +272,7 @@ test("only one of the two variables set: nothing published and one notice", asyn
   assert.ok(!existsSync(t.file));
 });
 
-const withHome = (name) => mkdtempSync(join(tmpdir(), `steak-dsh-${name}-`));
+const withHome = (name) => tempHome(`steak-dsh-${name}-`);
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
 test("D1: a second publisher on the same path refuses and leaves the first file's bytes unchanged", async () => {
@@ -509,7 +523,7 @@ test("N1: a publisher whose start was refused never replaces the file on /new", 
   assert.equal(second.active, false);
   await t.c.quit();
   // Someone else's file named by the variables: refused at start and still untouched after /new.
-  const home = mkdtempSync(join(tmpdir(), "steak-dsh-n1-"));
+  const home = tempHome("steak-dsh-n1-");
   const id = randomUUID();
   const file = join(home, `${id}.jsonl`);
   writeFileSync(file, "precious\n");
@@ -624,7 +638,7 @@ test("R3: /new in a folder that stopped being private stops publishing with a no
 });
 
 test("R4: a start that fails after creating the file leaves no file behind", () => {
-  const home = mkdtempSync(join(tmpdir(), "steak-dsh-r4-"));
+  const home = tempHome("steak-dsh-r4-");
   const id = randomUUID();
   const dir = join(home, "ui-transcripts");
   mkdirSync(dir, { mode: 0o700 });

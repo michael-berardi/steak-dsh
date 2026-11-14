@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.0 - 2026-11-14
+
+- The terminal UI could lose a session for good. Its harness child is started with a generated overlay file in the
+  temp folder. If that file was removed while the session ran, every restart died at boot with "dsh: failed to read
+  overlay ... ENOENT", wrote nothing to the session, and the notice showed only the last stderr line, Node's version
+  banner (`harness exited with code 1 (Node.js v22.22.2)`). Each message restarted it and it died again. Now the
+  overlay is written again, in a fresh temp folder, before every spawn (`tui` restarts and every `chat` turn), and a
+  missing `--patch` file is named instead.
+- A harness that exits on its own is reported with its cause: the exit code, the phase (startup or resume), the first
+  error line of its stderr and the top stack frame. The whole stderr tail (up to 64 KiB, it used to be 2000 characters)
+  goes to `$DSH_HOME/steak-dsh/logs/harness-exit-<time>-<pid>-<n>.log`, `0600` in a `0700` folder, and the notice
+  names the file. The same death no longer adds a second "send failed: harness closed the connection" line.
+- Crash loop guard: when the harness fails the same way twice in a row on one session, with no finished turn in
+  between, the terminal UI stops restarting it. It says so with the cause, keeps the session id on screen, and
+  offers `/new`. `/resume <id>` tries the old session again; that retry never resumes the failing session first.
+- New option `--approval-policy <never|ask>`, named as in dsh, for `run`, `chat` and `tui`. `never` is the default
+  everywhere, which `run` and `chat` already did. `tui` used to ask about every sandbox escalation, and in the
+  default `workspace-write` sandbox ordinary commands (`ps`, `git fetch`, reading files another process wrote, a tool
+  with its own sandbox) need one, so a long session asked again and again. Over the SDK wire the policy is carried by
+  the permission preset: the tui overlay rewrites the preset table with the chosen policy and makes `--permission` the
+  default preset of every new session. `/permission <preset>` is sent before the first prompt of every session and
+  after every restart and `/resume`. A preset typed in the session is kept across restarts and `/new`.
+  `--permission danger-full-access` means no sandbox and no prompts. The sandboxed default can do no more than before.
+- New bundle plugin `approval-never.js`: under policy `never`, a call that asks for a wider sandbox is refused before
+  it runs. The reason names the policy, the current preset and the preset (`--permission ...`, or `/permission ...`
+  in the terminal UI) that would allow it. The harness alone would say "the user rejected" though nobody was asked.
+  It does nothing under `ask`.
+- With `--approval-policy ask`, the approval selector offers `Allow for this session` (key `a`) beside `Allow once`
+  and `Reject`. The SDK approval reply has only a one-time grant, so the terminal UI keeps the rule itself. Until
+  you quit it answers identical requests (same session, tool and sandbox mode), including ones already queued, and
+  shows a line for each.
+- The status band shows the preset and approval policy in force (`workspace-write · approval never`, `ww/never` when
+  narrow). An open prompt shows `◇ waiting · <tool> · since HH:MM`. An answer given after the harness died is never
+  delivered to the restarted one.
+- Tests: the `claude-code` and `codex` end-to-end tests ran the real `dsh` against your own `$DSH_HOME` and left test
+  sessions in your session store. They now use a scratch home. The transcript-publisher tests left about 36
+  `steak-dsh-*` folders in the temp folder per run, and the TUI host test one more. They now remove them, and the fake
+  harness uses one exit listener instead of one per fake.
+
 ## 0.8.0 - 2026-11-13
 
 - The terminal UI can publish its conversation for a host app to show in its own view. With `ULTRATERM_UI_TRANSCRIPT_FILE`

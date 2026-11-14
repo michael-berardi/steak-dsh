@@ -61,7 +61,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.8.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.9.0
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -70,7 +70,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.8.0
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.8.0
+npm i -g github:michael-berardi/steak-dsh#v0.9.0
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -84,6 +84,7 @@ steak-dsh run "fix the failing test in src/parser"
 | Verify after edit | After a file edit, runs your project's check command and hands a failure straight back to the model with the edit result. After two failures in a row it pauses until your next request. | on, does nothing until you set a command |
 | Owned paths | Refuses file edits outside the paths a task owns. Symlinks are resolved first. | per run, `--owned-path` |
 | Finish guard | Keeps the turn open when the todo list has open items or the reply reports unfinished work, at most 3 times. Leaves subagent children alone. It costs no tool text. | on |
+| Approval-never refusal | With approval policy `never`, a call that asks for a wider sandbox is refused before it runs, and the reason names the preset that would allow it. The harness alone would answer "the user rejected" though nobody was asked. Every other call passes through. | on, acts only under `never` |
 | `more_tools` | One short tool (about 250 bytes on the first request). When the model calls it, the subagent tool, its follow-up tool and the working-directory switch are switched on and are in the next request, and the spill budget is raised so an oversized tool result stays readable by path. Goal and workflow tools stay off. | on |
 
 Every row can be switched from your own profile patch:
@@ -180,6 +181,29 @@ steak-dsh run --json --owned-path "$PWD/src" --no-shell "..." # scripted use: ND
 ```
 
 `steak-dsh --help` lists every flag. `--key-env` takes the name of an environment variable, never the key.
+
+### Permissions and approvals
+
+Two options decide what a task may touch and whether you are ever asked. `run`, `chat` and `tui` treat them the same.
+
+- `--permission <preset>`: the harness's sandbox preset. `read-only`, `workspace-write` (the default: writes inside the
+  working folder and the temp folders) or `danger-full-access` (no sandbox).
+- `--approval-policy <never|ask>`, in the harness's own words. `never` (the default) shows no approval prompt: a call
+  that asks to leave the sandbox (a bash call with `sandbox_permissions`) is refused at once. The model is told it
+  was refused and which preset would allow it, so it can tell you instead of retrying another way. `ask` puts each
+  such call to you. `danger-full-access` never asks, because there is nothing wider to ask for.
+
+```sh
+steak-dsh tui --model acme/coder-large                                   # sandboxed, never asks
+steak-dsh tui --model acme/coder-large --permission danger-full-access   # no sandbox, never asks
+steak-dsh tui --model acme/coder-large --approval-policy ask             # sandboxed, asks before leaving it
+```
+
+`never` was already what `run` and `chat` did. Before 0.9.0, `tui` asked about every escalation, and in a
+`workspace-write` sandbox many ordinary commands need one: `ps`, `git fetch`, reading files another process wrote, a
+tool that starts its own sandbox. So a long session asked again and again. The default stays sandboxed, so a new
+install can do no more than before. It just never waits on a prompt. If you want no sandbox and no prompts, choose
+`--permission danger-full-access`.
 
 ## The Claude Code route
 
@@ -375,11 +399,29 @@ Ctrl-A/E/B/F, Alt-B/F, Ctrl-W, Ctrl-U, Ctrl-K, Ctrl-Y edit; holding Backspace fo
 PageUp/PageDown scroll; Ctrl-O expands tool output; Ctrl-T shows or hides thinking; Esc interrupts the turn; Ctrl-C
 interrupts, then clears the editor, then quits; Ctrl-D quits on an empty editor. Pasted text (bracketed paste) is
 inserted as typed text and never sent or interpreted. `/new`, `/resume <id>` and `/exit` are local; any other
-`/command` goes to the harness (for example `/compact`).
+`/command` goes to the harness (for example `/compact`, `/permission <preset>`).
 
-Approvals and questions from the harness open a selector above the band; Esc or `n` rejects. If the harness dies, every
-open approval and question is dropped and nothing is allowed. Esc cancels a turn by stopping the child, starting a new
-one and resuming the same session (the SDK wire has no cancel call), which takes a few seconds.
+The band always shows the preset and the approval policy in force (`workspace-write · approval never`, shortened to
+`ww/never` on a narrow pane), so you can see why a prompt does or does not appear. `--permission` is applied with
+`/permission <preset>` before the first prompt of every session and again after every restart and `/resume`. A
+preset you type yourself (`/permission danger-full-access`) is kept across restarts and `/new`. A new session gets
+the preset and policy when the harness creates it, because the overlay makes them its defaults.
+
+With `--approval-policy ask`, an approval opens a selector above the band: `Allow once`, `Allow for this session`,
+`Reject` (keys `y`, `a`, `n`/Esc). The harness's approval reply only has a one-time grant, so `Allow for this
+session` is kept by the terminal UI: until you quit, it answers the same request itself (same session, tool and
+sandbox mode, whatever the justification says) and adds a line saying so. While a prompt is open the band shows
+`◇ waiting · <tool> · since HH:MM`. If the harness dies, every open approval and question is dropped and nothing is
+allowed. An answer given after that never reaches the restarted harness. Esc cancels a turn by stopping the child,
+starting a new one and resuming the same session (the SDK wire has no cancel call), which takes a few seconds.
+
+If the harness exits on its own, the notice gives the exit code, the first error line of its stderr and the top stack
+frame. The whole stderr goes to a private file, `$DSH_HOME/steak-dsh/logs/harness-exit-<time>-<pid>-<n>.log` (`0600`
+in a `0700` folder), and the notice names it. The next message restarts the harness and resumes the session. If the
+same failure happens twice in a row on the same session with no finished turn in between, the terminal UI stops
+restarting. It says so with the cause, keeps the session id on screen, and offers `/new`; `/resume <id>` tries the
+old session again. Before every restart the generated overlay file is written again if a temp cleaner removed it.
+Before 0.9.0 a missing overlay killed every restart at boot, and the notice showed only Node's version line.
 
 What it cannot match: text arrives per committed step, not token by token (the SDK wire carries committed messages
 only); the editor is keyboard-only (no IME placement, mouse or autocomplete); Markdown is minimal and code is not
@@ -541,6 +583,6 @@ Plugins run inside the `dsh` process. Owned paths gate the file-editing tools, n
 ## Development
 
 ```sh
-npm test                    # 234 tests, Node built-ins only
+npm test                    # 307 tests, Node built-ins only
 python3 benchmarks/selftest.py   # 20 tasks: check fails untouched, passes on the reference solution
 ```

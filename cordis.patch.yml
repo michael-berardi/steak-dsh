@@ -42,6 +42,11 @@
     - id: steak-verify-after-edit
       name: ./plugins/verify-after-edit.js
       config: {}
+    # With approval policy "never" (the steak-dsh default) a call that asks for a wider sandbox is refused up front
+    # with the preset that would allow it, instead of the harness's "the user rejected" wording. Inert otherwise.
+    - id: steak-approval-never
+      name: ./plugins/approval-never.js
+      config: {}
     # A model route that runs requests through a locally installed, logged-in coding CLI (see README). It starts nothing
     # until a model is listed or requested; with no CLI (or no login) it offers no models. Switch it off with
     #   - id: steak-cc-route

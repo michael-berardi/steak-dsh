@@ -8,8 +8,8 @@
 
  · turn cancelled; the harness was restarted and the session resumed
 
- ! harness exited with code 1 (out of memory): pending approvals and questions
-   were refused. Send a message to restart the harness and resume the session.
+ ! harness exited with code 1 (out of memory). Send a message to restart the
+   harness and resume the session.
 
 
 

@@ -18,7 +18,8 @@ function run(args, dir, fakeEnv) {
     encoding: "utf8",
     timeout: 120_000,
     env: {
-      PATH: process.env.PATH, HOME: process.env.HOME, DSH_HOME: process.env.DSH_HOME,
+      // A scratch dsh home: a test run must never write sessions into the user's own session store.
+      PATH: process.env.PATH, HOME: process.env.HOME, DSH_HOME: join(dir, ".dsh-home"),
       STEAK_DSH_CLAUDE_CODE_COMMAND: FAKE, FAKE_CLAUDE_LOG: log, ...fakeEnv,
     },
   });

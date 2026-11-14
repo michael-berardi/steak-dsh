@@ -10,6 +10,11 @@
  *     { request: { method, params }, name, noWait? } send a server request and log the client's answer under `name`
  *     { onStart: n } on any step: run it only in the n-th spawned child (0-based)
  *     { delay: ms } | { exit: code } | { crash: signal } | { stderr: text } | { hang: true }
+ *   boot: [ step ... ] played at process start, before any request is read (a crash at boot, as dsh dies when an
+ *         overlay file is missing); `onStart` selects the spawn.
+ *   checkPatches: true dies at boot like dsh 0.2.2 when a --patch file is missing (Node's uncaught-error text, exit 1).
+ *   permission: { error: text } makes `/permission <preset>` fail as the harness reports an unknown preset.
+ * `/permission <preset>` queries are answered like the harness's command (logged, onQuery steps are not played).
  * stubbornShutdown: true ignores `shutdown` and stdin EOF (only SIGTERM ends it).
  * ignoreSigint: true makes the child survive SIGINT (the controller must escalate).
  * Everything the child receives or answers is appended to FAKE_DSH_LOG as JSON lines.
@@ -50,6 +55,16 @@ async function play(steps) {
     if (step.hang) await new Promise(() => {});
   }
 }
+if (scenario.checkPatches) {
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--patch" && !fs.existsSync(argv[i + 1])) {
+      process.stderr.write("file:///fake/dsh-app-boot/lib/index.js:4713\n\t\tthrow new Error(msg);\n\t\t      ^\n\nError: dsh: failed to read overlay " + argv[i + 1] + ": Error: ENOENT: no such file or directory, open '" + argv[i + 1] + "'\n    at loadOverlayPatches (file:///opt/fake/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:4713:9)\n    at composeProfile (file:///opt/fake/lib/profile-boot.js:246:24)\n\nNode.js v22.22.2\n");
+      process.exit(1);
+    }
+  }
+}
+play(scenario.boot);
 let buffer = "";
 if (scenario.stubbornShutdown) setInterval(() => {}, 1000);
 process.stdin.setEncoding("utf8");
@@ -87,10 +102,18 @@ async function handle(msg) {
       session = msg.params.sessionId;
       send({ id: msg.id, result: { messageId: "m-" + nextId } });
       return play(scenario.onPrompt);
-    case "session/query":
+    case "session/query": {
       session = msg.params.sessionId;
+      const text = msg.params.contentBlocks?.[0]?.text ?? "";
+      if (/^\/permission\s/.test(text)) {
+        const preset = text.split(/\s+/)[1];
+        const result = scenario.permission?.error ? { kind: "error", text: scenario.permission.error } : { kind: "success", text: "preset " + preset };
+        send({ method: "session.query.completed", params: { sessionId: session, commandId: "p1", finishReason: "completed", finalResponse: result.text } });
+        return send({ id: msg.id, result: { kind: "command", execution: { commandId: "p1", result } } });
+      }
       send({ id: msg.id, result: { kind: "command", execution: { commandId: "c1" } } });
       return play(scenario.onQuery);
+    }
     case "shutdown":
       if (scenario.stubbornShutdown) return; // never answers; ignores stdin EOF; only SIGTERM stops it
       send({ id: msg.id, result: {} });
@@ -100,6 +123,12 @@ async function handle(msg) {
   }
 }
 `;
+
+/** Every fake's folder, removed when the test process exits (one listener, however many fakes a file makes). */
+const fakeDirs = new Set();
+process.once("exit", () => {
+  for (const dir of fakeDirs) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+});
 
 /** Write the fake dsh into a fresh temp dir. Returns { dir, bin, log(), scenario(obj), env, entries() }. */
 export function makeFakeDsh(scenario = {}) {
@@ -111,17 +140,21 @@ export function makeFakeDsh(scenario = {}) {
   // temp folder inside this repository (TMPDIR set by scripts/test-install.sh) would load it as an ES module and
   // fail on `require`. Its own package.json makes it CommonJS wherever the temp folder is.
   writeFileSync(join(dir, "package.json"), '{"type":"commonjs"}\n');
-  process.once("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+  fakeDirs.add(dir);
   const scenarioPath = join(dir, "scenario.json");
   const logPath = join(dir, "log.jsonl");
   writeFileSync(scenarioPath, JSON.stringify(scenario));
   const entries = () => (existsSync(logPath) ? readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
   return {
     dir, bin, logPath, scenarioPath,
-    env: { ...process.env, FAKE_DSH_SCENARIO: scenarioPath, FAKE_DSH_LOG: logPath, DSH_TELEMETRY_MODE: "DISABLED" },
+    // DSH_HOME is the fake's own folder: exit logs and anything else keyed on the harness home stay out of ~/.dsh.
+    env: { ...process.env, FAKE_DSH_SCENARIO: scenarioPath, FAKE_DSH_LOG: logPath, DSH_TELEMETRY_MODE: "DISABLED", DSH_HOME: dir },
     entries,
     starts: () => entries().filter((e) => e.start && !e.argv.includes("--version")),
     received: (method) => entries().filter((e) => e.in?.method === method).map((e) => e.in),
+    /** session/query requests other than the controller's own `/permission` ones. */
+    queries: () => entries().filter((e) => e.in?.method === "session/query" && !/^\/permission\s/.test(e.in.params.contentBlocks?.[0]?.text ?? "")).map((e) => e.in),
+    permissions: () => entries().filter((e) => e.in?.method === "session/query" && /^\/permission\s/.test(e.in.params.contentBlocks?.[0]?.text ?? "")).map((e) => ({ sessionId: e.in.params.sessionId, text: e.in.params.contentBlocks[0].text })),
   };
 }
 
