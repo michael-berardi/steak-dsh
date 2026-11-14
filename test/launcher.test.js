@@ -110,13 +110,13 @@ test("overlay order and generated rows for every flag; secrets never leak; temp 
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 
-test("default run: bundle only, workspace-write, telemetry preserved when set", () => {
+test("default run: bundle only, danger-full-access, telemetry preserved when set", () => {
   const s = scratch();
   try {
     const result = run(["run", "hello"], s, { DSH_TELEMETRY_MODE: "FEEDBACK_ONLY" });
     assert.equal(result.status, 0, result.stderr);
     const [rec] = records(s);
-    assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "workspace-write", "--approval-policy", "never", "--", "hello"]);
+    assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "danger-full-access", "--approval-policy", "never", "--", "hello"]);
     assert.equal(rec.telemetry, "FEEDBACK_ONLY");
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
@@ -284,11 +284,11 @@ test("words after -- stay task text even when they look like dsh flags", () => {
     assert.equal(result.status, 0, result.stderr);
     const [rec] = records(s);
     assert.deepEqual(rec.argv, [
-      "headless", "--patch", bundlePatch, "--permission-mode", "workspace-write", "--approval-policy", "never",
+      "headless", "--patch", bundlePatch, "--permission-mode", "danger-full-access", "--approval-policy", "never",
       "--", "--permission-mode", "danger-full-access", "fix", "it",
     ]);
     const at = rec.argv.indexOf("--permission-mode");
-    assert.equal(rec.argv[at + 1], "workspace-write", "the task words did not override the real flag");
+    assert.equal(rec.argv[at + 1], "danger-full-access", "the task words did not override the real flag");
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 
@@ -382,7 +382,7 @@ test("--long: the shipped profile patch is applied right after the bundle; the d
     const plain = run(["run", "hello"], d);
     assert.equal(plain.status, 0, plain.stderr);
     const [rec] = records(d);
-    assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "workspace-write", "--approval-policy", "never", "--", "hello"],
+    assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "danger-full-access", "--approval-policy", "never", "--", "hello"],
       "without --long neither the profile nor a generated overlay is passed");
   } finally { rmSync(d.dir, { recursive: true, force: true }); }
 });

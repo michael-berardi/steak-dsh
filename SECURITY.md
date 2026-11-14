@@ -9,7 +9,7 @@ repository content in a report. Include the Steak DSH and `dsh` versions, reprod
 
 ## Trust boundary
 
-Steak DSH plugins run inside the `dsh` process with its permissions.
+Steak DSH plugins run inside the `dsh` process with its permissions. By default, `danger-full-access` runs commands without a sandbox or approval prompts: the agent can run any command you could. Use `--permission workspace-write` to confine writes to the working folder and temp folders, or `--permission read-only`. Add `--approval-policy ask` to be asked before wider actions.
 
 - **Owned paths** gate the file-editing tools (`edit`, `write`, `apply_patch`, `str_replace_editor`). They do not
   gate the shell: a task that may run shell commands can write anywhere the `dsh` permission preset allows. Pair

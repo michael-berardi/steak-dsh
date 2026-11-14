@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.0
+
+- The default permission changed from `workspace-write` to `danger-full-access`: commands run without a sandbox or approval prompts. Use `--permission workspace-write` for the old behaviour.
+- The terminal UI status band no longer displays the permission preset or approval policy. An open approval still shows its waiting state.
+
 ## 0.9.0 - 2026-11-14
 
 - The terminal UI could lose a session for good. Its harness child is started with a generated overlay file in the

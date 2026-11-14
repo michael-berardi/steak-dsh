@@ -359,14 +359,14 @@ test("/permission is sent before the first prompt of every session and after eve
     { sessionId: first, text: "/permission read-only" }, // the restart re-applies the preset then in force
     { sessionId: first, text: "/permission danger-full-access" }, // the user's own command, sent once
   ]);
-  assert.equal(c.state.permission, "danger-full-access");
+  assert.equal(c.o.permission, "danger-full-access");
   await c.submit("crash again");
   await until(() => !c.state.childAlive, "crash 2");
   await c.submit("after restart");
   await until(() => fake.received("session/prompt").length === 3, "prompt after the second restart");
   assert.deepEqual(fake.permissions().at(-1), { sessionId: first, text: "/permission danger-full-access" }, "the typed preset survives a restart");
   await c.submit("/new");
-  assert.equal(c.state.permission, "danger-full-access", "/new keeps the preset in the band");
+  assert.equal(c.o.permission, "danger-full-access", "/new keeps the preset");
   await c.submit("new session");
   assert.deepEqual(fake.permissions().at(-1), { sessionId: c.state.sessionId, text: "/permission danger-full-access" }, "and the new session gets it before its first prompt");
   assert.ok(!c.state.blocks.some((b) => b.kind === "notice" && /^preset /.test(b.text)), "the harness's completion line for the controller's own /permission is not shown");
@@ -409,4 +409,12 @@ test("an approval left open: the band shows since when; an answer given after th
   assert.equal(fake.entries().some((e) => e.answer), false, "no late answer was delivered to anyone");
   assert.equal(c.state.childAlive, true, "the session is usable");
   await finish(c, fake);
+});
+
+test("missing permission uses full access before the first prompt", async () => {
+  const { fake, c } = await boot({}, { permission: undefined });
+  try {
+    await c.submit("hello");
+    assert.equal(fake.permissions()[0].text, "/permission danger-full-access");
+  } finally { await finish(c, fake); }
 });

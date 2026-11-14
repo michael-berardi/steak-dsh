@@ -61,7 +61,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.9.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.0
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -70,7 +70,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.9.0
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.9.0
+npm i -g github:michael-berardi/steak-dsh#v0.10.0
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -79,6 +79,7 @@ steak-dsh run "fix the failing test in src/parser"
 
 | Part | What it does | Default |
 |---|---|---|
+| Full access | Long coding sessions can finish while you are away: commands run with full access and no approval prompts by default. | on |
 | Lean tool set | Removes the tools a one-shot coding task does not use (goals, workflows, subagents, working-directory switch): 13 tools plus `more_tools` instead of 23 sent with every request. Skips the model-written session title. | on |
 | Working rules | Six lines in the system prompt: batch independent tool calls, gather context once, compute on large files instead of reading them, check a change once, finish every part, keep the reply short. | on |
 | Verify after edit | After a file edit, runs your project's check command and hands a failure straight back to the model with the edit result. After two failures in a row it pauses until your next request. | on, does nothing until you set a command |
@@ -157,6 +158,8 @@ project under `"trusted"` in `$DSH_HOME/steak-dsh.json`.
 
 Stock `dsh` has no model flags. `steak-dsh` adds them and passes everything else through.
 
+By default, the agent runs commands with full access to your machine and never stops to ask, so long coding sessions can finish while you are away. The agent can run any command you could. To confine it, use `--permission workspace-write` (writes stay inside the working folder and temp folders) or `--permission read-only`, and add `--approval-policy ask` to be asked before each wider action.
+
 ```sh
 # a provider your dsh already knows
 steak-dsh run --model deepseek-official/deepseek-flash "add a --json flag to the report command"
@@ -186,24 +189,20 @@ steak-dsh run --json --owned-path "$PWD/src" --no-shell "..." # scripted use: ND
 
 Two options decide what a task may touch and whether you are ever asked. `run`, `chat` and `tui` treat them the same.
 
-- `--permission <preset>`: the harness's sandbox preset. `read-only`, `workspace-write` (the default: writes inside the
-  working folder and the temp folders) or `danger-full-access` (no sandbox).
+- `--permission <preset>`: the harness's sandbox preset. `read-only`, `workspace-write` (writes inside the
+  working folder and the temp folders) or `danger-full-access` (the default: no sandbox).
 - `--approval-policy <never|ask>`, in the harness's own words. `never` (the default) shows no approval prompt: a call
   that asks to leave the sandbox (a bash call with `sandbox_permissions`) is refused at once. The model is told it
   was refused and which preset would allow it, so it can tell you instead of retrying another way. `ask` puts each
   such call to you. `danger-full-access` never asks, because there is nothing wider to ask for.
 
 ```sh
-steak-dsh tui --model acme/coder-large                                   # sandboxed, never asks
-steak-dsh tui --model acme/coder-large --permission danger-full-access   # no sandbox, never asks
-steak-dsh tui --model acme/coder-large --approval-policy ask             # sandboxed, asks before leaving it
+steak-dsh tui --model acme/coder-large                                               # no sandbox, never asks
+steak-dsh tui --model acme/coder-large --permission workspace-write                  # sandboxed, never asks
+steak-dsh tui --model acme/coder-large --permission workspace-write --approval-policy ask  # asks before leaving the sandbox
 ```
 
-`never` was already what `run` and `chat` did. Before 0.9.0, `tui` asked about every escalation, and in a
-`workspace-write` sandbox many ordinary commands need one: `ps`, `git fetch`, reading files another process wrote, a
-tool that starts its own sandbox. So a long session asked again and again. The default stays sandboxed, so a new
-install can do no more than before. It just never waits on a prompt. If you want no sandbox and no prompts, choose
-`--permission danger-full-access`.
+In a `workspace-write` sandbox, ordinary commands such as `ps` and `git fetch` can need a wider sandbox. With `never`, those requests are refused; with `ask`, you can approve them.
 
 ## The Claude Code route
 
@@ -320,6 +319,8 @@ other way round.
 
 ## The terminal UI
 
+By default, the agent runs commands with full access to your machine and never stops to ask, so long coding sessions can finish while you are away. The agent can run any command you could. To confine it, use `--permission workspace-write` (writes stay inside the working folder and temp folders) or `--permission read-only`, and add `--approval-policy ask` to be asked before each wider action.
+
 `steak-dsh tui` is a full-screen terminal UI that follows the layout and vocabulary of the Steak Pi companion: a one-line
 header, the transcript, a status band, and a multi-line editor. It takes the same options as `chat` (`--model`,
 `--long`, `--stock`, `--effort`, `--owned-path`, `--verify`, `--patch`, ...) and needs `--model`, because the SDK wire
@@ -401,8 +402,7 @@ interrupts, then clears the editor, then quits; Ctrl-D quits on an empty editor.
 inserted as typed text and never sent or interpreted. `/new`, `/resume <id>` and `/exit` are local; any other
 `/command` goes to the harness (for example `/compact`, `/permission <preset>`).
 
-The band always shows the preset and the approval policy in force (`workspace-write · approval never`, shortened to
-`ww/never` on a narrow pane), so you can see why a prompt does or does not appear. `--permission` is applied with
+`--permission` is applied with
 `/permission <preset>` before the first prompt of every session and again after every restart and `/resume`. A
 preset you type yourself (`/permission danger-full-access`) is kept across restarts and `/new`. A new session gets
 the preset and policy when the harness creates it, because the overlay makes them its defaults.

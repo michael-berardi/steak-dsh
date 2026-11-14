@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderBand } from "../lib/tui/band.js";
 import { Editor } from "../lib/tui/editor.js";
 import { composeFrame, frameText } from "../lib/tui/screen.js";
 import { reduce } from "../lib/tui/state.js";
@@ -79,5 +80,20 @@ test("a short terminal still gets a valid frame (every region kept, viewport shr
     const { frame } = render("full-turn", { columns: 60, rows });
     assert.equal(frame.lines.length, rows);
     assert.ok(frame.lines.every((l) => visibleWidth(l) <= 60));
+  }
+});
+
+test("band ignores permission and approval display fields at all widths", () => {
+  const theme = createTheme({ mode: "none" });
+  for (const width of [30, 50, 80, 120]) {
+    const original = base();
+    if (width === 80 || width === 120) {
+      golden(`band-permissions.${width}.txt`, renderBand(width, { ...original, permission: "workspace-write", approvalPolicy: "never" }, theme).join("\n") + "\n");
+    }
+    for (const permission of ["workspace-write", "read-only", "danger-full-access"]) {
+      for (const approvalPolicy of ["never", "ask"]) {
+        assert.deepEqual(renderBand(width, { ...original, permission, approvalPolicy }, theme), renderBand(width, original, theme));
+      }
+    }
   }
 });

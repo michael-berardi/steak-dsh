@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 import { parseOptions } from "../lib/args.js";
 import { headlessArgs, overlayFiles, presetTable, sdkPermissionRows } from "../lib/overlay.js";
 import { approvalRuleKey, summarizeStderr } from "../lib/tui/session.js";
-import { permissionAtom } from "../lib/tui/band.js";
 import { apply as applyNever, escalationRefusal } from "../plugins/approval-never.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -61,7 +60,7 @@ test("overlay ensure(): a generated overlay that vanished is written again in a 
     assert.equal(files.length, 3, "bundle, generated, user patch");
     const generated = files[1];
     const text = readFileSync(generated, "utf8");
-    assert.match(text, /"defaultPreset": "workspace-write"/);
+    assert.match(text, /"defaultPreset": "danger-full-access"/);
     assert.deepEqual(ensure(), files, "nothing to do while every file is there");
     rmSync(dirname(generated), { recursive: true, force: true });
     const again = ensure();
@@ -125,10 +124,16 @@ test("Allow-for-this-session key: same session, tool and sandbox mode match what
   assert.notEqual(ask("open the port"), ask("open another port"), "other approvals match only on the exact reason");
 });
 
-test("band: the preset and approval policy are always visible, danger-full-access never asks", () => {
-  assert.equal(permissionAtom({ permission: "workspace-write", approvalPolicy: "never" }), "workspace-write · approval never");
-  assert.equal(permissionAtom({ permission: "workspace-write", approvalPolicy: "ask" }, "compact"), "ww/ask");
-  assert.equal(permissionAtom({ permission: "read-only", approvalPolicy: "ask" }, "tight"), "ro/a");
-  assert.equal(permissionAtom({ permission: "danger-full-access", approvalPolicy: "ask" }), "danger-full-access · approval never");
-  assert.equal(permissionAtom({}), undefined);
+test("default permission for run, chat and tui and SDK fallback", () => {
+  for (const command of ["run", "chat", "tui"]) {
+    const options = parseOptions(command === "run" ? ["task"] : [], { allowTask: command === "run", command }).options;
+    assert.equal(options.permission, "danger-full-access");
+    assert.equal(options.approvalPolicy, "never");
+    assert.equal(parseOptions(["--permission", "workspace-write", ...(command === "run" ? ["task"] : [])], { allowTask: command === "run", command }).options.permission, "workspace-write");
+  }
+  assert.equal(sdkPermissionRows({})[1].config.defaultPreset, "danger-full-access");
+});
+
+test("README states the full access default", () => {
+  assert.ok(readFileSync(join(root, "README.md"), "utf8").includes("By default, the agent runs commands with full access to your machine and never stops to ask, so long coding sessions can finish while you are away."));
 });
