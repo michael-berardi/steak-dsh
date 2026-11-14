@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.2 - 2026-11-14
+
+- **Runs start about 100 ms sooner.** The launcher used to start the harness once just to read its version (about 65 ms)
+  before starting it again for the task; it now reads the version from the installed package and only asks the binary
+  when it is not that package. The harness also starts with Node's compile cache, so its several hundred modules are not
+  compiled again on every run. Measured on a scripted three-request run against a local endpoint, 15 paired runs:
+  launch to first model request 835 ms to 727 ms, whole run 937 ms to 838 ms. Nothing else about a run changes.
+- `STEAK_DSH_COMPILE_CACHE=0` turns the compile cache off; a `NODE_COMPILE_CACHE` already set is kept.
+
 ## 0.10.1 - 2026-11-14
 
 - The finish guard is checked against the harness's own todo tool. A test runs the real harness with a scripted model

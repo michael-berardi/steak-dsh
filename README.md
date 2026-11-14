@@ -61,7 +61,7 @@ You need `dsh` 0.2.2-rc.1 or newer (`npm i -g @deepseek-ai/dsh`) and Node 22 or 
 **As a plugin**, in the profile you already use:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.1
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.2
 ```
 
 `dsh` adds the bundle to that profile's bundle list. Every `dsh headless "task"` now runs with it. Remove it with
@@ -70,7 +70,7 @@ dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.1
 **As a launcher**, which changes none of your profiles:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.10.1
+npm i -g github:michael-berardi/steak-dsh#v0.10.2
 steak-dsh doctor
 steak-dsh run "fix the failing test in src/parser"
 ```
@@ -184,6 +184,15 @@ steak-dsh run --json --owned-path "$PWD/src" --no-shell "..." # scripted use: ND
 ```
 
 `steak-dsh --help` lists every flag. `--key-env` takes the name of an environment variable, never the key.
+
+### Start-up time
+
+The launcher adds as little as it can before the harness starts. It reads the harness version from the installed
+package instead of starting the harness to ask, and it turns on Node's compile cache for the harness (kept in
+`~/.cache/steak-dsh/compile-cache`, keyed by file content, so an upgrade never runs stale code). On a scripted run of
+three model requests against a local endpoint that answers at once, 15 paired runs, the time from launch to the first
+model request fell from 835 ms to 727 ms and the whole run from 937 ms to 838 ms. `STEAK_DSH_COMPILE_CACHE=0` turns the
+cache off; a `NODE_COMPILE_CACHE` you set yourself is used as it is.
 
 ### Permissions and approvals
 
