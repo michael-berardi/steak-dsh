@@ -1,9 +1,13 @@
 # Steak DSH
 
+[![Release](https://img.shields.io/github/v/release/michael-berardi/steak-dsh)](https://github.com/michael-berardi/steak-dsh/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#install)
+
 A plugin bundle and launcher for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 (`dsh`), for coding tasks in the terminal. It adds model flags, checks after edits,
 file-edit boundaries and a smaller default tool inventory. The launcher leaves your existing profiles alone.
-Node 22+, no runtime npm dependencies, MIT licensed.
+Node 22+, no runtime npm dependencies, MIT licensed. By [Pareto Cybernetics](https://paretocybernetics.com).
 
 By default, the agent runs commands with full access to your machine and never stops to ask, so long coding sessions can finish while you are away.
 Use `--permission workspace-write` or `--permission read-only` to request a sandbox.
@@ -52,6 +56,15 @@ Or add only the plugin to a profile:
 
 ```sh
 dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.2
+```
+
+### From source
+
+With Node 22+ and a supported dsh installed:
+
+```sh
+git clone https://github.com/michael-berardi/steak-dsh.git
+npm install -g ./steak-dsh
 ```
 
 ## Use
@@ -111,8 +124,8 @@ succeeded for both stock dsh and Steak DSH on each model below.
 
 | Model | Steak DSH / stock dsh cost | 95% bootstrap interval |
 |---|---|---|
-| DeepSeek V4.1 Flash | 0.84 | 0.76–0.93 |
-| Qwen 4 Max (weighted tokens, not dollars) | 0.70 | 0.62–0.78 |
+| [DeepSeek V4.1 Flash](benchmarks/results/2026-11-11-deepseek-v4.1-flash.jsonl) | 0.84 | 0.76–0.93 |
+| [Qwen 4 Max](benchmarks/results/2026-11-11-qwen4-max.jsonl) (weighted tokens, not dollars) | 0.70 | 0.62–0.78 |
 
 Recompute from this repository without model access:
 
@@ -136,3 +149,5 @@ python3 benchmarks/selftest.py
 ```
 
 See [contributing](CONTRIBUTING.md) and [changelog](CHANGELOG.md).
+
+Part of [Pareto Cybernetics](https://paretocybernetics.com): free, private, open-source tools for working with AI agents.
