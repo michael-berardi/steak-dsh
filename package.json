@@ -26,6 +26,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
   "files": [
+    "docs",
     "plugins",
     "claude-code",
     "codex",

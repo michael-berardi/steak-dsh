@@ -5,7 +5,7 @@ A plugin bundle and launcher for [DeepSeek Harness](https://github.com/deepseek-
 file-edit boundaries and a smaller default tool inventory. The launcher leaves your existing profiles alone.
 Node 22+, no runtime npm dependencies, MIT licensed.
 
-**Commands run with full machine access and no approval prompts by default.**
+By default, the agent runs commands with full access to your machine and never stops to ask, so long coding sessions can finish while you are away.
 Use `--permission workspace-write` or `--permission read-only` to request a sandbox.
 Owned paths restrict file tools, not shell commands; add `--no-shell` when that boundary matters.
 
