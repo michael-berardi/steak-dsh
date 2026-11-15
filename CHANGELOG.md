@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.3 - 2026-11-15
+
+- **README:** 597 lines to 153. It leads with what the bundle adds and the one-line install; the reference material moved to `docs/`, which now ships in the package and the release archive.
+- The benchmark claims on the front page are limited to the two ratios that the result files in this repository reproduce.
+- Corrected: the supported `dsh` range, what the approval settings cover, and the finish-guard description.
+
 ## 0.10.2 - 2026-11-14
 
 - **Runs start about 100 ms sooner.** The launcher used to start the harness once just to read its version (about 65 ms)
