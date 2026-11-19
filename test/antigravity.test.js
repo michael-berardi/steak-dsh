@@ -1,7 +1,7 @@
 // The Antigravity route against a local fake server only: no real Google call is made.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAntigravityAdapter } from "../antigravity/adapter.js";
@@ -148,15 +148,49 @@ test("sign-in: PKCE code flow, exchange, project discovery, credential saved 060
   assert.match(fake.seen.find((s) => s.url.startsWith("/v1internal:loadCodeAssist")).headers["user-agent"], /^steak-dsh-antigravity\//);
 });
 
-test("sign-in: a callback with a different state is refused and nothing is exchanged or saved", async (t) => {
+test("sign-in: a callback with a wrong or missing state, even one carrying error=, is answered 400 and the sign-in keeps waiting", async (t) => {
   const fake = await startFake();
   t.after(() => fake.close());
   const { env } = scratchEnv();
-  fake.on("/token", (req, res) => json(res, 200, { access_token: "a", refresh_token: "r", expires_in: 3600 }));
-  const b = browser({ state: () => "forged" });
-  await assert.rejects(login(testConfig(fake, { redirectPort: await freePort() }), b.io, { env, signal: b.signal }), /state did not match/);
+  fake.on("/token", (req, res) => json(res, 200, { access_token: "acc-1", refresh_token: "ref-1", expires_in: 3600 }));
+  fake.on("/v1internal:loadCodeAssist", (req, res) => json(res, 200, { cloudaicompanionProject: "proj-9" }));
+  const statuses = [];
+  const b = browser();
+  const good = b.io.notify;
+  b.io.notify = (url) => {
+    const auth = new URL(url);
+    const redirect = new URL(auth.searchParams.get("redirect_uri"));
+    const hit = async (query) => { statuses.push((await fetch(`${redirect.origin}${redirect.pathname}?${query}`)).status); };
+    void (async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      await hit("error=access_denied");
+      await hit("code=evil&state=forged");
+      await hit("code=evil");
+      await hit(`error=${encodeURIComponent("x\u001b[2Jy")}&state=forged`);
+      good(url);
+    })();
+  };
+  const credential = await login(testConfig(fake, { redirectPort: await freePort() }), b.io, { env, signal: b.signal });
+  assert.deepEqual(statuses, [400, 400, 400, 400]);
+  assert.equal(credential.access, "acc-1");
+  assert.equal(new URLSearchParams(fake.seen.find((s) => s.url === "/token").body).get("code"), "code-1");
+});
+
+test("sign-in: a refusal that carries the right state is final, with control characters removed; pasted errors too", async (t) => {
+  const fake = await startFake();
+  t.after(() => fake.close());
+  const { env } = scratchEnv();
+  const b = browser();
+  b.io.notify = (url) => {
+    const auth = new URL(url);
+    const redirect = new URL(auth.searchParams.get("redirect_uri"));
+    redirect.searchParams.set("error", "denied\u001b[2J\u009bX");
+    redirect.searchParams.set("state", auth.searchParams.get("state"));
+    setTimeout(() => void fetch(redirect).catch(() => {}), 20);
+  };
+  await assert.rejects(login(testConfig(fake, { redirectPort: await freePort() }), b.io, { env, signal: b.signal }), (e) => e.message === "Google sign-in was refused: denied[2JX");
   assert.equal(fake.seen.some((s) => s.url === "/token"), false);
-  assert.equal(existsSync(credentialPath(env)), false);
+  assert.throws(() => parsePasted("?error=a%1b%5b2Jb&state=s", "s"), (e) => e.message === "Google sign-in was refused: a[2Jb");
 });
 
 test("sign-in: no OAuth client in config is a named error; no refresh token is a named error", async (t) => {
@@ -494,8 +528,19 @@ test("antigravity command: login, status and logout; not turned on is a named er
   assert.equal(readCredential(env).projectId, "proj-9");
   out = "";
   assert.equal(await antigravityCommand(["status"], io), 0);
-  assert.match(out, /signed in; project proj-9; access token valid/);
+  assert.match(out, /signed in; project proj-9; access token not expired locally/);
+  assert.doesNotMatch(out, /acc-1|ref-1|valid/);
   assert.doesNotMatch(out, /acc-1|ref-1/);
+  // status reads the file only: an expired token is not renewed and the file is not rewritten.
+  writeCredential({ ...readCredential(env), expires: Date.now() - 1000 }, env);
+  const before = readFileSync(credentialPath(env), "utf8");
+  const seenBefore = fake.seen.length;
+  out = "";
+  assert.equal(await antigravityCommand(["status"], io), 0);
+  assert.match(out, /expired locally/);
+  assert.equal(readFileSync(credentialPath(env), "utf8"), before);
+  assert.equal(fake.seen.length, seenBefore);
+  writeCredential({ ...readCredential(env), expires: Date.now() + 3_600_000 }, env);
   assert.equal(await antigravityCommand(["logout"], io), 0);
   assert.equal(existsSync(credentialPath(env)), false);
 });
@@ -514,4 +559,117 @@ test("neutrality: no model, vendor model family, OAuth client or account in the 
   }
   for (const host of ["cloudcode-pa.googleapis.com", "accounts.google.com", "oauth2.googleapis.com", "www.googleapis.com"]) hosts.delete(host);
   assert.deepEqual([...hosts].filter((h) => !/^(?:localhost|127\.0\.0\.1|example\.com)$/.test(h)), []);
+});
+
+test("token: concurrent callers share one refresh, and one caller's cancel does not fail the others", async (t) => {
+  const { fake, env, cfg } = await rig(t, { credential: { expires: Date.now() - 1000 } });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  fake.on("/token", async (req, res) => { await gate; json(res, 200, { access_token: "tok-2", expires_in: 3600 }); });
+  const first = new AbortController();
+  const a = access({ config: cfg, env, signal: first.signal });
+  const b = access({ config: cfg, env });
+  a.catch(() => {});
+  await new Promise((r) => setTimeout(r, 50));
+  first.abort(new Error("caller one cancelled"));
+  await assert.rejects(a, /caller one cancelled/);
+  release();
+  assert.equal((await b).token, "tok-2");
+  assert.equal(fake.seen.filter((s) => s.url === "/token").length, 1);
+  assert.equal(readCredential(env).access, "tok-2");
+});
+
+test("token: a network failure during refresh is a transport error, not an expired sign-in", async (t) => {
+  const { env, cfg } = await rig(t, { credential: { expires: Date.now() - 1000 }, config: { tokenUrl: "http://127.0.0.1:9/token" } });
+  const error = await access({ config: cfg, env }).catch((e) => e);
+  assert.equal(error.code, CODES.HTTP);
+  assert.match(error.message, /cannot reach the token endpoint.*try again/);
+  assert.doesNotMatch(error.message, /no longer valid|antigravity login/);
+  assert.equal(readCredential(env).access, "tok-live-1");
+});
+
+test("config: an enabled file that others can write, or another user owns, is refused with the fix", { skip: process.platform === "win32" }, () => {
+  const { home } = scratchEnv();
+  for (const body of [{ enabled: true }, { enabled: true, clientId: "a", clientSecret: "b" }]) {
+    const path = join(home, `w${Object.keys(body).length}.json`);
+    writeConfigFile(path, body, 0o666);
+    assert.throws(() => loadConfig({ [CONFIG_ENV]: path }), /writable by other users.*chmod 600/);
+    chmodSync(path, 0o620);
+    assert.throws(() => loadConfig({ [CONFIG_ENV]: path }), /writable by other users/);
+    chmodSync(path, 0o600);
+    assert.equal(loadConfig({ [CONFIG_ENV]: path }).enabled, true);
+  }
+  const off = join(home, "off.json");
+  writeConfigFile(off, {}, 0o666);
+  assert.equal(loadConfig({ [CONFIG_ENV]: off }), undefined);
+  const readable = join(home, "readable.json");
+  writeConfigFile(readable, { enabled: true }, 0o644);
+  assert.equal(loadConfig({ [CONFIG_ENV]: readable }).enabled, true);
+  const own = join(home, "own.json");
+  writeConfigFile(own, { enabled: true });
+  const real = process.getuid;
+  process.getuid = () => real.call(process) + 1;
+  try { assert.throws(() => loadConfig({ [CONFIG_ENV]: own }), /not owned by the current user.*chown.*chmod 600/); } finally { process.getuid = real; }
+});
+
+test("identity: userAgent, requestType and ideType follow the config; defaults are documented values", async (t) => {
+  const d = parseConfig({ enabled: true });
+  assert.deepEqual([d.requestType, d.ideType], ["agent", "ANTIGRAVITY"]);
+  const { fake, adapter } = await rig(t, { config: { userAgent: "my-client/1", requestType: "chat", ideType: "OTHER_IDE" } });
+  fake.on(STREAM, (req, res) => sse(res, [chunk([{ text: "ok" }], { finishReason: "STOP" })]));
+  await collect(adapter, req([user("hi")]));
+  assert.deepEqual({ ua: JSON.parse(streamCalls(fake)[0].body).userAgent, rt: JSON.parse(streamCalls(fake)[0].body).requestType }, { ua: "my-client/1", rt: "chat" });
+  fake.on("/v1internal:loadCodeAssist", (req, res) => json(res, 200, { cloudaicompanionProject: "p" }));
+  const { discoverProject } = await import("../antigravity/client.js");
+  await discoverProject(testConfig(fake, { ideType: "OTHER_IDE" }), "t");
+  assert.deepEqual(JSON.parse(fake.seen.find((s) => s.url.startsWith("/v1internal:loadCodeAssist")).body), { metadata: { ideType: "OTHER_IDE" } });
+});
+
+test("bounds: one SSE line, an error body, a token reply and the model list are capped with a named protocol error", async (t) => {
+  const { sseData } = await import("../antigravity/stream.js");
+  async function* chunks() { yield Buffer.from(`data: ${"x".repeat(50)}`); yield Buffer.from("y".repeat(50)); }
+  const lineError = await (async () => { try { for await (const _ of sseData(chunks(), 64)) { /* drain */ } } catch (e) { return e; } })();
+  assert.equal(lineError?.code, CODES.PROTOCOL);
+  assert.match(lineError.message, /stream line longer than 64/);
+  const { fake, adapter, cfg } = await rig(t);
+  fake.on(STREAM, (req, res) => { res.writeHead(500); res.end("z".repeat(1024 * 1024 + 10)); });
+  const error = await failure(adapter, req([user("hi")]));
+  assert.equal(error.code, CODES.PROTOCOL);
+  assert.match(error.message, /reply body is larger than 1048576 bytes/);
+  const { refreshTokens } = await import("../antigravity/client.js");
+  fake.on("/token", (req, res) => { res.writeHead(200); res.end("t".repeat(1024 * 1024 + 10)); });
+  await assert.rejects(refreshTokens(cfg, "r"), (e) => e.code === CODES.PROTOCOL);
+  const models = {};
+  for (let i = 0; i < 30000; i++) models[`m-${i}`] = { displayName: "n".repeat(40) };
+  fake.on(LIST, (req, res) => json(res, 200, { models }));
+  assert.equal((await listModels(cfg, { token: "t", projectId: "p" })).length, 30000);
+  fake.on(LIST, (req, res) => { res.writeHead(200); res.end("a".repeat(9 * 1024 * 1024)); });
+  await assert.rejects(listModels(cfg, { token: "t", projectId: "p" }), /larger than 8388608 bytes/);
+});
+
+test("providerMessage strips C0, DEL and C1 control characters", async () => {
+  const { providerMessage } = await import("../antigravity/errors.js");
+  assert.equal(providerMessage(JSON.stringify({ error: { message: "bad\u001b[31m thing\u009b\u007f!" } })), "bad[31m thing!");
+});
+
+test("failover: not after the body finished uploading, and not after any answer (5xx)", async (t) => {
+  const { fake, env } = await rig(t);
+  const reset = await startFake();
+  t.after(() => reset.close());
+  let first = 0;
+  reset.on(LIST, (rq, res) => json(res, 200, ROWS));
+  reset.raw(STREAM, (rq) => { first += 1; rq.on("end", () => rq.socket.destroy()); rq.resume(); });
+  fake.on(STREAM, (rq, res) => sse(res, [chunk([{ text: "ok" }], { finishReason: "STOP" })]));
+  const a = createAntigravityAdapter(harness, { config: testConfig(fake, { baseUrls: [reset.url, fake.url] }), env: () => env });
+  const error = await failure(a, req([user("hi")]));
+  assert.match(error.message, /had been sent, so it was not sent to another endpoint/);
+  assert.equal(first, 1);
+  assert.equal(streamCalls(fake).length, 0);
+  const down = await startFake();
+  t.after(() => down.close());
+  down.on(LIST, (rq, res) => json(res, 200, ROWS));
+  down.on(STREAM, (rq, res) => json(res, 503, { error: { message: "busy" } }));
+  const b = createAntigravityAdapter(harness, { config: testConfig(fake, { baseUrls: [down.url, fake.url] }), env: () => env });
+  assert.match((await failure(b, req([user("hi")]))).message, /503/);
+  assert.equal(streamCalls(fake).length, 0);
 });

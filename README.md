@@ -49,13 +49,13 @@ To remove it, delete the install directory and its command shims, then run
 Already have Node and a supported dsh? Install only the launcher:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.11.0
+npm i -g github:michael-berardi/steak-dsh#v0.11.1
 ```
 
 Or add only the plugin to a profile:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.11.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.11.1
 ```
 
 ### From source
@@ -114,13 +114,26 @@ on**, ships no model, no OAuth client and no account, and with no config file lo
    dispatch declares gateway routes with an API key; it does not run the login-backed routes, so use this one from
    the `steak-dsh` command.)
 
-Optional config keys: `baseUrls` (https; tried in order only when one cannot be reached), `authUrl`, `tokenUrl`,
-`scopes`, `redirectPort` (default 51121, must match the client's registered redirect), `userAgent`, `projectId`,
+Optional config keys: `baseUrls` (https; tried in order only when one cannot be reached before the request body had
+finished uploading; a request that was sent, or that got any answer including a 5xx, is not sent to another endpoint),
+`authUrl`, `tokenUrl`, `scopes` (default: `aicode`, `cloud-platform`, `userinfo.email`, `userinfo.profile`, `cclog`,
+`experimentsandconfigs`; configurable, and whether the last two are needed is not verified),
+`redirectPort` (default 51121, must match the client's registered redirect), `userAgent` (sent as the `User-Agent`
+header and as `userAgent` in the request envelope), `requestType` (default `"agent"`, sent in the envelope),
+`ideType` (default `"ANTIGRAVITY"`, sent in the project lookup; so by default the project lookup does name that
+client family, and the service may refuse other values), `projectId`,
 `maxRateLimitWaitMs` (default 30000) and `maxRateLimitRetries` (default 2). The route is text-only (an image is
 named in text, as on the other routes). Named failures: no client in config, a refused refresh (sign in again),
 a 401 (one refresh, one resend, then named), 403, a 429 (waits at most the bound, then says when to retry), a silent
 connection, a stalled upload (not sent again) and a stream cut without a finish reason. Nothing falls back quietly.
-With the route off the cost is one failed file read. See the 0.11.0 changelog entry for what was verified.
+While the route is on, a config file that other users can write or that another user owns is refused (the error
+gives the `chmod`/`chown`), as is one holding a client secret that others can read. A callback with a missing or
+wrong state is answered 400 and ignored, so nothing but the real callback can end a sign-in; text from a callback
+or a provider is shown without control characters. A network failure while refreshing says the token endpoint cannot
+be reached; it does not call the sign-in invalid. One stream line over 16 MiB, an error or token reply over 1 MiB and
+a model list over 8 MiB end the request with a `protocol` error. `antigravity status` reads the saved file only: it
+says "not expired locally" and does not call Google or rewrite the file.
+With the route off the cost is one failed file read. See the 0.11.0 and 0.11.1 changelog entries for what was verified.
 
 ## Checks and profiles
 

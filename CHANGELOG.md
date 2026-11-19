@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.1 - 2026-11-19
+
+Hardens the optional Google Antigravity route after an independent review. Nothing changes while it is off.
+
+- **A stray request cannot cancel a sign-in.** A callback with a missing or wrong `state`, even one carrying `error=`, is answered 400 and the sign-in keeps waiting; only a callback with the right state ends it.
+- **Control characters are removed** from callback text, pasted-text errors and provider messages before they are shown.
+- **A network failure while refreshing says so** (`cannot reach the token endpoint ... try again`) instead of calling the sign-in invalid; a 5xx from the token endpoint is not an expired sign-in either.
+- **The config file is checked whenever the route is enabled:** one that others can write, or that another user owns, is refused with the command to fix it; a secret that others can read is still refused.
+- **Identity values are configurable and documented:** the envelope `userAgent` follows `userAgent`; `requestType` and `ideType` are new config keys with documented defaults. The scope list is documented as configurable.
+- **Incoming data is bounded:** a stream line (16 MiB), an error or token reply (1 MiB) and a model list (8 MiB).
+- **No resend after the body was uploaded:** the next endpoint is tried only when the connection failed before the upload finished; a 5xx is no longer passed on.
+- **A cancelled caller no longer fails the others waiting on the same token refresh:** the shared refresh carries no caller's signal and each caller races its own.
+- **`antigravity status` says "not expired locally"** instead of "valid", and no longer calls Google or rewrites the credential file.
+- 10 new tests; the test that pinned abort-on-mismatch is replaced.
+
 ## 0.11.0 - 2026-11-19
 
 Adds an optional Google Antigravity route, built in and off until you configure it.
