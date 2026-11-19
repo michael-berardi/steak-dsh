@@ -78,7 +78,7 @@ export function createAntigravityAdapter(harness, { config, env = () => process.
         const row = rows.find((r) => r.id === options.model);
         if (!row) throw new AntigravityError(`Antigravity: model "${options.model}" is not in this account's list. Run \`steak-dsh models --provider antigravity\` to see what it offers`, CODES.HTTP);
         const session = await access({ config, env: env(), signal: options.signal });
-        const envelope = buildRequest(options, row, session.projectId);
+        const envelope = buildRequest(options, row, session.projectId, config);
         const reply = await call(config, session, "/v1internal:streamGenerateContent?alt=sse", envelope, "stream", { signal: options.signal, timeoutMs, ...(sleep ? { sleep } : {}) });
         const translator = new Translator(harness.ToolCallId);
         for await (const data of sseData(reply.chunks())) yield* translator.chunk(data);

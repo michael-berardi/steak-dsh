@@ -80,6 +80,8 @@ export function parseConfig(raw, version = "dev") {
     scopes,
     redirectPort: port,
     userAgent: optionalString("userAgent", raw.userAgent) ?? `steak-dsh-antigravity/${version}`,
+    requestType: optionalString("requestType", raw.requestType) ?? "agent",
+    ideType: optionalString("ideType", raw.ideType) ?? "ANTIGRAVITY",
     projectId: optionalString("projectId", raw.projectId),
     maxRateLimitWaitMs: whole("maxRateLimitWaitMs", raw.maxRateLimitWaitMs, 30_000, 300_000),
     maxRateLimitRetries: whole("maxRateLimitRetries", raw.maxRateLimitRetries, 2, 3),
@@ -89,7 +91,7 @@ export function parseConfig(raw, version = "dev") {
 /**
  * Read the operator's config. Undefined when there is no file or it does not say `"enabled": true`: the route then
  * registers nothing. A file that exists but is unreadable, not JSON or invalid is a named error, because a typo must
- * not silently leave the route off. A file holding a client secret must not be readable by other users.
+ * not silently leave the route off. A file that other users can write, or that another user owns, is refused; so is one holding a client secret that they can read.
  */
 export function loadConfig(env = process.env, version) {
   const path = configPath(env);
@@ -101,9 +103,15 @@ export function loadConfig(env = process.env, version) {
   let raw;
   try { raw = JSON.parse(text); } catch { throw new AntigravityError(`${path} is not valid JSON`, CODES.NOT_CONFIGURED); }
   const config = parseConfig(raw, typeof version === "function" ? version() ?? "dev" : version);
-  if (config?.clientSecret && process.platform !== "win32") {
-    const mode = statSync(path).mode & 0o777;
-    if (mode & 0o077) throw new AntigravityError(`${path} holds a client secret but is readable by other users (mode ${mode.toString(8)}); run: chmod 600 ${path}`, CODES.NOT_CONFIGURED);
+  if (config && process.platform !== "win32") {
+    // The endpoints in this file decide where the token is sent, so whoever can write it can take the token.
+    const info = statSync(path);
+    const mode = info.mode & 0o777;
+    if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+      throw new AntigravityError(`${path} is not owned by the current user (owner uid ${info.uid}); run: chown "$(id -un)" ${path} && chmod 600 ${path}`, CODES.NOT_CONFIGURED);
+    }
+    if (mode & 0o022) throw new AntigravityError(`${path} is writable by other users (mode ${mode.toString(8)}), and its endpoints decide where the token is sent; run: chmod 600 ${path}`, CODES.NOT_CONFIGURED);
+    if (config.clientSecret && mode & 0o077) throw new AntigravityError(`${path} holds a client secret but is readable by other users (mode ${mode.toString(8)}); run: chmod 600 ${path}`, CODES.NOT_CONFIGURED);
   }
   return config;
 }

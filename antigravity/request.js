@@ -92,7 +92,7 @@ export function systemText(options) {
 }
 
 /** The request envelope for one turn. `row` is the provider's own entry for the model. */
-export function buildRequest(options, row, projectId) {
+export function buildRequest(options, row, projectId, identity = { userAgent: "steak-dsh-antigravity", requestType: "agent" }) {
   const contents = buildContents(options.messages);
   if (contents.length === 0 || contents.at(-1).role !== "user") throw new AntigravityError("The history must end in a user or tool-result message; there is nothing to answer", CODES.UNSUPPORTED);
   const generationConfig = { maxOutputTokens: Math.min(options.maxTokens ?? row.maxTokens, row.maxTokens) };
@@ -113,5 +113,5 @@ export function buildRequest(options, row, projectId) {
   }
   if (tools.length) request.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.parameters ?? { type: "object", properties: {} } })) }];
   if (options.sessionId !== undefined) request.sessionId = String(options.sessionId);
-  return { project: projectId, model: row.id, request, requestType: "agent", userAgent: "antigravity", requestId: `steak-dsh-${randomUUID()}` };
+  return { project: projectId, model: row.id, request, requestType: identity.requestType, userAgent: identity.userAgent, requestId: `steak-dsh-${randomUUID()}` };
 }
