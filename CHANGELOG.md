@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Runs Gemini models through Google's official Antigravity CLI (`agy`) and removes the direct Antigravity OAuth route.
+
+- **New `agy/<model-id>` route.** `steak-dsh run|chat|tui --model agy/<id>` wraps `agy` in the headless mode Google documents for scripting: `agy -p <prompt> --model <id> --output-format stream-json --add-dir <cwd>` per turn, `--effort` mapped from `--effort` (`off` is sent as `low`). agy keeps its own agent loop and runs its own tools under its own permission rules; each tool step is shown as a progress line, never as a harness tool call. Streamed text, usage and the final status (`SUCCESS`, `ERROR`, `CANCELED`, `INTERRUPTED`, `INVALID`) reach the harness as text, usage, a stop reason or a named error. A later turn resumes agy's conversation. Abort stops agy's whole process group (SIGINT, then bounded SIGTERM and SIGKILL). `--dangerously-skip-permissions` is never passed.
+- **Model ids come from `agy models`** at runtime (`steak-dsh models --provider agy`); none is shipped. `steak-dsh doctor` reports whether agy is installed and signed in.
+- **Named errors:** agy missing (with `curl -fsSL https://antigravity.google/cli/install.sh | bash`), not signed in (agy's own text plus `run agy once to sign in`; a run stops at once instead of waiting out agy's 60 s browser sign-in), plan lacks the model, timeout, cancelled.
+- **Removed: the `antigravity/` route**, `steak-dsh antigravity login|status|logout`, its plugin row, config and tests. Google's terms forbid third-party software accessing Antigravity with its OAuth. If `$DSH_HOME/steak-dsh-antigravity.json` exists, `doctor` and `--model antigravity/...` print one line saying so and pointing at `--model agy/<id>`.
+- Not verified against a signed-in agy (needs a Pro or Ultra plan): the suite uses a fake `agy` that prints the stream-json from Google's documentation; the real signed-out binary was run for `models` and `run`.
+
 ## 0.12.0 - 2026-11-19
 
 Adds a `local` route: run on a local model managed by Steak Pi, with or without a LoRA adapter.

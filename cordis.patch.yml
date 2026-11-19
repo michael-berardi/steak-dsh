@@ -62,11 +62,11 @@
     - id: steak-codex-route
       name: ./plugins/codex-route.js
       config: {}
-    # A model route that runs requests on a Google Antigravity sign-in (see README). Off until
-    # $DSH_HOME/steak-dsh-antigravity.json says "enabled": true: with no file it reads that one path and loads nothing,
-    # registers no model and ships no OAuth client. Switch it off entirely from your profile patch with
-    #   - id: steak-antigravity-route
+    # A model route that runs requests through Google's official Antigravity CLI (agy, headless mode) on the agy
+    # sign-in already on this machine (see README). agy runs its own tools under its own permission rules. It starts
+    # nothing until a model is listed or requested; with no agy (or no sign-in) it offers no models. Switch it off with
+    #   - id: steak-agy-route
     #     disabled: true
-    - id: steak-antigravity-route
-      name: ./plugins/antigravity-route.js
+    - id: steak-agy-route
+      name: ./plugins/agy-route.js
       config: {}

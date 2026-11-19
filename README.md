@@ -87,7 +87,7 @@ The API is `openai-completions`, `openai-responses` or `anthropic-messages`.
 `--key-env` takes an environment variable name, never the key itself.
 `--effort` controls reasoning; `--stock` omits the bundle for comparisons.
 
-Two optional login-backed routes are included:
+Two optional login-backed routes are included (a third, `agy`, is described below):
 
 - `claude-code/<model>` uses the installed Claude Code CLI and its login. Authenticate
   with `claude auth login`. API-key and alternative-billing environment settings are
@@ -100,40 +100,46 @@ Both routes are text-only, need no gateway flags and cannot be used with `--stoc
 `steak-dsh models` lists their available models; `--json --provider openai-codex`
 filters machine-readable output. A failed route reports an error and exit status 1.
 
-A third, optional route runs on a Google Antigravity sign-in. It is **off until you turn it
-on**, ships no model, no OAuth client and no account, and with no config file loads nothing.
+### Google Antigravity CLI (`agy/<model-id>`)
 
-1. Create `$DSH_HOME/steak-dsh-antigravity.json` (default `~/.dsh/steak-dsh-antigravity.json`) and `chmod 600` it:
-   `{ "enabled": true, "clientId": "<your OAuth client id>", "clientSecret": "<your OAuth client secret>" }`.
-   The client is one you are allowed to use with the service; Steak DSH does not ship one.
-2. `steak-dsh antigravity login` prints a Google sign-in address, captures the loopback callback
-   (or asks you to paste the callback URL on a remote machine) and saves the sign-in, owner-only, in
-   `$DSH_HOME/steak-dsh-antigravity-auth.json`. `steak-dsh antigravity status` and `logout` do what they say.
-3. `steak-dsh models --provider antigravity` lists what your account offers (the list comes from the service),
-   and `steak-dsh run --model antigravity/<model-id> ...` uses one. (Steak Pi's `steak-dsh/<provider>/<model-id>`
-   dispatch declares gateway routes with an API key; it does not run the login-backed routes, so use this one from
-   the `steak-dsh` command.)
+`agy/<model-id>` runs Gemini models through Google's official Antigravity CLI (`agy`) in the headless mode Google
+documents for scripting and CI (<https://antigravity.google/docs/cli/headless>). It needs your own `agy` and your own
+sign-in; Steak DSH ships no model, no OAuth client and no credentials.
 
-Optional config keys: `baseUrls` (https; tried in order only when one cannot be reached before the request body had
-finished uploading; a request that was sent, or that got any answer including a 5xx, is not sent to another endpoint),
-`authUrl`, `tokenUrl`, `scopes` (default: `aicode`, `cloud-platform`, `userinfo.email`, `userinfo.profile`, `cclog`,
-`experimentsandconfigs`; configurable, and whether the last two are needed is not verified),
-`redirectPort` (default 51121, must match the client's registered redirect), `userAgent` (sent as the `User-Agent`
-header and as `userAgent` in the request envelope), `requestType` (default `"agent"`, sent in the envelope),
-`ideType` (default `"ANTIGRAVITY"`, sent in the project lookup; so by default the project lookup does name that
-client family, and the service may refuse other values), `projectId`,
-`maxRateLimitWaitMs` (default 30000) and `maxRateLimitRetries` (default 2). The route is text-only (an image is
-named in text, as on the other routes). Named failures: no client in config, a refused refresh (sign in again),
-a 401 (one refresh, one resend, then named), 403, a 429 (waits at most the bound, then says when to retry), a silent
-connection, a stalled upload (not sent again) and a stream cut without a finish reason. Nothing falls back quietly.
-While the route is on, a config file that other users can write or that another user owns is refused (the error
-gives the `chmod`/`chown`), as is one holding a client secret that others can read. A callback with a missing or
-wrong state is answered 400 and ignored, so nothing but the real callback can end a sign-in; text from a callback
-or a provider is shown without control characters. A network failure while refreshing says the token endpoint cannot
-be reached; it does not call the sign-in invalid. One stream line over 16 MiB, an error or token reply over 1 MiB and
-a model list over 8 MiB end the request with a `protocol` error. `antigravity status` reads the saved file only: it
-says "not expired locally" and does not call Google or rewrite the file.
-With the route off the cost is one failed file read. See the 0.11.0 and 0.11.1 changelog entries for what was verified.
+1. Install agy: `curl -fsSL https://antigravity.google/cli/install.sh | bash`
+2. Sign in once by running `agy` interactively. Headless runs use that cached sign-in; they cannot sign in.
+3. `steak-dsh models --provider agy` prints `agy/<id>` for what `agy models` lists. Your plan decides the list.
+4. `steak-dsh run --model agy/gemini-4-neon-high "your task"` (the id is whatever step 3 printed; `chat` and `tui` work the same).
+
+**Tool calls run inside agy, under agy's permission rules.** agy keeps its own agent loop, its own tools (shell, file
+edits, MCP) and its own `settings.json` permission rules; the dsh harness does not run them. By default agy asks
+before shell commands and file writes, and with no one to ask in a headless run it denies them softly (the run goes
+on and agy prints a notice, which Steak DSH passes to stderr). To let a tool run, add an `allow` rule in agy's
+settings (<https://antigravity.google/docs/cli/permissions>). Steak DSH never passes `--dangerously-skip-permissions`.
+Each agy tool step appears in the reply as a progress line such as `[agy tool: run_command echo hi]`, not as a
+harness tool call, so the harness's own tools, `--permission` presets, `--owned-path` and verify-after-edit do not
+govern what agy does. agy runs in the directory you launched from, with that directory added to its workspace.
+
+How a run works: one `agy -p <prompt> --model <id> --output-format stream-json --add-dir <cwd>` per turn
+(`--effort` when you pass `--effort`; `off` is sent as `low`, since agy has no off). The text agy streams is the reply;
+token usage and the final status come from agy's `result` event. A later turn resumes agy's own conversation
+(`--conversation <id>`) and sends only what you said since. Abort sends SIGINT to agy's process group, then SIGTERM
+after 3 s and SIGKILL after 2 s more. The route is text-only (an image is refused, named). Optional plugin config
+(`steak-agy-route` row): `command` (the agy path; or set `STEAK_DSH_AGY_BIN`) and `timeoutMs` (or
+`STEAK_DSH_AGY_TIMEOUT_MS`; default none, as in agy).
+
+Named failures, no silent fallback: agy missing (`AGY_MISSING`, with the install command above); not signed in
+(`AGY_NOT_SIGNED_IN`: agy's own words plus `run agy once to sign in`); the plan lacks the model
+(`AGY_MODEL_UNAVAILABLE`); `AGY_TIMEOUT`; `AGY_CANCELLED` (agy status `CANCELED` or `INTERRUPTED`, or an abort);
+`AGY_INVALID`; `AGY_FAILED` (any other `ERROR`, or agy exiting without a result). `steak-dsh doctor` reports whether
+agy is installed and signed in.
+
+**Removed: the direct Antigravity OAuth route** (`antigravity/<id>`, `steak-dsh antigravity login|status|logout`).
+Google's terms say: "Using third party software, tools, or services to access the Service (e.g. using OpenClaw with
+Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your
+Antigravity and/or Gemini CLI accounts." (<https://antigravity.google/terms>). If `$DSH_HOME/steak-dsh-antigravity.json`
+still exists, `steak-dsh doctor` and `--model antigravity/...` print one line saying so; delete the file and the saved
+`steak-dsh-antigravity-auth.json`, and use `--model agy/<id>`.
 
 ## Local models
 
