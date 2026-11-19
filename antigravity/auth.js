@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import { dirname } from "node:path";
 import { discoverProject, exchangeCode, needClient, refreshTokens } from "./client.js";
 import { credentialPath } from "./config.js";
-import { AntigravityError, CODES } from "./errors.js";
+import { AntigravityError, CODES, stripControl } from "./errors.js";
 
 export const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
 const CALLBACK_PATH = "/oauth-callback";
@@ -46,17 +46,34 @@ export function removeCredential(env = process.env) {
 
 let renewing;
 
-/** A session for requests: the saved sign-in, renewed first when it is at its expiry. */
+/** Resolve with `promise`, or reject as soon as this caller's own `signal` aborts. The shared promise is left running. */
+function raceSignal(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error("Antigravity request aborted"));
+    if (signal.aborted) { onAbort(); return; }
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+/**
+ * A session for requests: the saved sign-in, renewed first when it is at its expiry. Callers that meet an expired token
+ * at the same time share one refresh. That refresh carries no caller's signal (a caller that cancels must not fail the
+ * others); each caller races its own signal against it instead.
+ */
 export async function access({ config, env = process.env, now = Date.now, signal } = {}) {
+  signal?.throwIfAborted();
   let credential = readCredential(env);
   if (credential.expires <= now()) {
+    const stale = credential;
     renewing ??= (async () => {
-      const tokens = await refreshTokens(config, credential.refresh, signal);
-      const next = { ...credential, access: tokens.access, refresh: tokens.refresh ?? credential.refresh, expires: tokens.expires };
+      const tokens = await refreshTokens(config, stale.refresh);
+      const next = { ...stale, access: tokens.access, refresh: tokens.refresh ?? stale.refresh, expires: tokens.expires };
       writeCredential(next, env);
       return next;
     })().finally(() => { renewing = undefined; });
-    credential = await renewing;
+    credential = await raceSignal(renewing, signal);
   }
   const projectId = credential.projectId || config.projectId;
   const session = {
@@ -84,9 +101,11 @@ function listen(config, expectedState) {
       const error = url.searchParams.get("error");
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
-      if (error) { page(res, 400, "Sign-in failed. You can close this window."); settle.fail(new AntigravityError(`Google sign-in was refused: ${error.slice(0, 100)}`, CODES.SIGN_IN)); return; }
-      if (!code || !state) { page(res, 400, "Sign-in failed: missing code or state."); settle.fail(new AntigravityError("The sign-in callback had no code or state", CODES.SIGN_IN)); return; }
-      if (state !== expectedState) { page(res, 400, "Sign-in failed: state mismatch."); settle.fail(new AntigravityError("The sign-in callback state did not match this sign-in (possible forged callback); start the login again", CODES.SIGN_IN)); return; }
+      // A request with a missing or wrong state is not part of this sign-in: refuse it and keep waiting, so no web page or
+      // local process can end the sign-in by sending one. Only a callback that carries the right state is final.
+      if (state !== expectedState) return page(res, 400, "Sign-in failed: state missing or not matching this sign-in.");
+      if (error) { page(res, 400, "Sign-in failed. You can close this window."); settle.fail(new AntigravityError(`Google sign-in was refused: ${stripControl(error).slice(0, 100)}`, CODES.SIGN_IN)); return; }
+      if (!code) { page(res, 400, "Sign-in failed: missing code."); settle.fail(new AntigravityError("The sign-in callback had no code", CODES.SIGN_IN)); return; }
       page(res, 200, "Antigravity sign-in complete. You can close this window and return to the terminal.");
       settle.ok({ code, state });
     });
@@ -110,7 +129,7 @@ export function parsePasted(raw, expectedState) {
   let url;
   try { url = new URL(text); } catch { url = new URL(`http://localhost${CALLBACK_PATH}?${text.replace(/^\?/, "")}`); }
   const error = url.searchParams.get("error");
-  if (error) throw new AntigravityError(`Google sign-in was refused: ${error.slice(0, 100)}`, CODES.SIGN_IN);
+  if (error) throw new AntigravityError(`Google sign-in was refused: ${stripControl(error).slice(0, 100)}`, CODES.SIGN_IN);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   if (!code || !state) throw new AntigravityError("The pasted text has no code or state; paste the full callback URL", CODES.SIGN_IN);
@@ -141,7 +160,7 @@ export async function login(config, io, { env = process.env, signal } = {}) {
       let message = "Browser on another machine? After signing in, paste the full callback URL from its address bar.";
       for (;;) {
         const text = await io.prompt(message, settle.signal);
-        try { return parsePasted(text, state); } catch (error) { message = `${error.message}. Paste the full callback URL:`; }
+        try { return parsePasted(text, state); } catch (error) { message = `${stripControl(error.message)}. Paste the full callback URL:`; }
       }
     })();
     pasted.catch(() => {});

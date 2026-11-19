@@ -38,6 +38,11 @@ export function redact(text) {
   return out;
 }
 
+/** Drop control characters (C0, DEL, C1) so text from a callback or a provider cannot steer the terminal. */
+export function stripControl(text) {
+  return String(text).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "");
+}
+
 /** The provider's own message from an error body, redacted and bounded. */
 export function providerMessage(body) {
   let text = String(body ?? "").trim();
@@ -47,7 +52,7 @@ export function providerMessage(body) {
     const description = typeof parsed.error_description === "string" ? parsed.error_description : undefined;
     text = [inner, description].filter(Boolean).join(": ") || text;
   } catch { /* not JSON: the raw text is the message */ }
-  return redact(text).replace(/\s+/g, " ").slice(0, 300) || "no message";
+  return stripControl(redact(text).replace(/\s+/g, " ")).slice(0, 300) || "no message";
 }
 
 /** "2 h 3 min", "45 s": a wait a person can read. */

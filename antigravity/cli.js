@@ -1,6 +1,6 @@
 /** `steak-dsh antigravity login | status | logout`. Loaded only when that command is run. */
 import { createInterface } from "node:readline";
-import { access, login, readCredential, removeCredential } from "./auth.js";
+import { login, readCredential, removeCredential } from "./auth.js";
 import { configPath, credentialPath, loadConfig } from "./config.js";
 import { AntigravityError, CODES } from "./errors.js";
 
@@ -35,10 +35,9 @@ export async function antigravityCommand(argv, { env = process.env, version, out
     }
     case "status": {
       const config = requireConfig(env, version);
+      // Reads the saved file only: no network call and no rewrite. Whether Google still honours the grant is not checked.
       const credential = readCredential(env);
-      const session = await access({ config, env });
-      void session;
-      out(`antigravity: signed in; project ${credential.projectId}; access token ${credential.expires > Date.now() ? "valid" : "renewed just now"}.\n`);
+      out(`antigravity: signed in; project ${credential.projectId}; access token ${credential.expires > Date.now() ? "not expired locally" : "expired locally (renewed on the next request)"}.\n`);
       return 0;
     }
     case "logout":
