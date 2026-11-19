@@ -14,6 +14,8 @@ export class ClaudeWaitLimitError extends ClaudeCodeError {
   childAlive;
   bytesReceived;
   recoveries;
+  /** The request body stopped moving mid-upload. Never resent: that would only restart the upload. */
+  uploadStalled;
   /** The API had already sent the whole reply (message_stop) when the silence hit: asking again would pay for it twice. */
   replyComplete;
 

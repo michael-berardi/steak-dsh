@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.6 - 2026-11-19
+
+Fixes a stall in the Claude Code route when the uplink is slow, and removes a leftover waiting-status setting.
+
+- **A slow upload is no longer mistaken for a silent model.** The first-byte limit counted the time the request body was still uploading as silence, so a large conversation on a busy uplink was cut, quietly sent again from the start, and never answered. The limit now starts when the body has been handed over, and does not run while the body is moving; upload progress also counts as activity for the outer idle limit.
+- **A body that stops moving fails with its own cause and is not sent again:** `request upload stalled at X of Y MB`. A resend would only restart the upload.
+- Removed the unused `statusAfterMs` limit (the route has no live waiting line, and a test fails if one is added). Images are already replaced by a short text on this route, so there is no image payload to re-send.
 ## 0.10.5 - 2026-11-19
 
 Fixes from the final review of 0.10.4.

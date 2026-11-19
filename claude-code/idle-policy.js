@@ -101,7 +101,6 @@ export function idleLimits(timeoutMs, shape = {}, env = process.env) {
     firstByteMs,
     streamIdleMs,
     queueIdleMs: Math.min(MAX_TIMER_MS, Math.max(firstByteMs, streamIdleMs) + margin),
-    statusAfterMs: Math.max(25, Math.min(30_000, Math.round(Math.min(firstByteMs, streamIdleMs) / 3))),
     maxRecoveries: envCount(env, "STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES") ?? MAX_REQUEST_SENDS - 1,
     maxSends: MAX_REQUEST_SENDS,
     recoveryBackoffMs: [Math.min(2_000, Math.round(timeoutMs / 10)), Math.min(8_000, Math.round(timeoutMs / 4))],
