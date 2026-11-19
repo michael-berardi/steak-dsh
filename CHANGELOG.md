@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.5 - 2026-11-19
+
+Fixes from the final review of 0.10.4.
+
+- **A turn that finishes from the relay's capture after `message_stop` is pinned end to end.** A test through the real adapter where Claude Code hangs after the API's `message_stop` checks the usage the harness sees (output tokens from `message_delta`, not `message_start`), a tool call whose arguments arrive in several `input_json_delta` pieces, and the `tool-calls` finish reason. The capture was already correct; it is now tested.
+- **An empty `STEAK_DSH_CLAUDE_CODE_*` variable no longer hides a valid plugin config value.** The route reads an empty or blank variable as unset, but the plugin merged it over the config; now the config value is used.
+- The recovery loop asks `canRestart` again right before the restart, after the backoff and the acquisition: output that reached the harness in the meantime ends the turn with the named error, and no second request is sent.
+
 ## 0.10.4 - 2026-11-18
 
 - **A quiet or stalled Claude Code turn no longer ends the run.** The route had one 180 s silence limit for every stage. Now: a connection that never answers is retried quietly at the first-byte limit (about 54 s at the default budget); once the reply is streaming the idle limit is 1.4 to 1.8 times the budget, scaled up for high reasoning effort and large requests; and a stalled process is stopped and the turn asked again from the same history, at most twice, while nothing of the reply has reached the harness (what was already handed over cannot be taken back, so that case ends with a named error). Claude Code only generates, so asking again repeats no tool call. The final error names the silence, the last event, whether the process was alive and how many recoveries were tried. Set `idleLimitMs`, `firstByteLimitMs` and `maxRecoveries` in the plugin config, or `STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS`, `STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS` and `STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES`.

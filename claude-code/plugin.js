@@ -24,7 +24,12 @@ export function apply(ctx, config = {}) {
   if (config.idleLimitMs !== undefined) limits.STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS = String(checkedMs("claude-code plugin config idleLimitMs", config.idleLimitMs));
   if (config.firstByteLimitMs !== undefined) limits.STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS = String(checkedMs("claude-code plugin config firstByteLimitMs", config.firstByteLimitMs));
   if (config.maxRecoveries !== undefined) limits.STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES = String(checkedCount("claude-code plugin config maxRecoveries", config.maxRecoveries));
-  const env = () => ({ ...limits, ...process.env, ...(command ? { STEAK_DSH_CLAUDE_CODE_COMMAND: command } : {}) });
+  const env = () => {
+    const merged = { ...limits, ...process.env, ...(command ? { STEAK_DSH_CLAUDE_CODE_COMMAND: command } : {}) };
+    // An empty (or blank) variable counts as unset, as the route itself reads it, so it must not hide a valid config value.
+    for (const [name, value] of Object.entries(limits)) if (String(process.env[name] ?? "").trim() === "") merged[name] = value;
+    return merged;
+  };
   const note = (message) => process.stderr.write(`${message}\n`);
   setClaudeCodeDiagnosticReporter(note);
   const adapter = createClaudeCodeAdapter(harness, { env, timeoutMs, report: note });

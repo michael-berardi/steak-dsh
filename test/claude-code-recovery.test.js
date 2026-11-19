@@ -66,14 +66,14 @@ async function rig(behaviour, body) {
       attempts: () => attempts,
       pids: () => readFileSync(spawns, "utf8").split("\n").filter(Boolean).map(Number),
       /** The same turn through the real createClaudeCodeAdapter wiring: returns every chunk the harness would receive. */
-      stream: async (env = {}, signal) => {
+      stream: async (env = {}, signal, tools = []) => {
         const adapter = createClaudeCodeAdapter(harness, {
           env: () => ({ PATH: process.env.PATH, HOME: process.env.HOME, STEAK_DSH_CLAUDE_CODE_COMMAND: executable, SPAWNS: spawns, ...env }),
           timeoutMs: BUDGET, upstreamUrl: `http://127.0.0.1:${port}`,
         });
         const chunks = [];
         try {
-          for await (const chunk of adapter.stream(request([user("hello")], { signal, sessionId: `s-${Math.random()}` }))) chunks.push(chunk);
+          for await (const chunk of adapter.stream(request([user("hello")], { signal, tools, sessionId: `s-${Math.random()}` }))) chunks.push(chunk);
           return { chunks };
         } catch (error) {
           throw Object.assign(error, { chunks });
@@ -285,6 +285,49 @@ test("message_stop and then Claude Code hangs: the turn finishes from the receiv
   assert.ok(lines.some((line) => /whole reply/.test(line)), JSON.stringify(lines));
 }));
 
+test("hangs after message_stop: usage, tool arguments and stop reason the harness sees come from the relay's capture", () => rig((_attempt, response) => {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  sse(
+    response,
+    START,
+    textStart, textDelta("let me "), textDelta("look"), { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "mcp__dsh__lookup", input: {} } },
+    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{\"query\":\"ab" } },
+    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "c\",\"limit\"" } },
+    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: ":3}" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 7 } },
+    { type: "message_stop" },
+  );
+  response.end();
+}, async (r) => {
+  const tool = { name: "lookup", description: "look something up", parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } } } };
+  const { chunks } = await r.stream({ HANG_AFTER_REPLY: "1" }, undefined, [tool]);
+  const kinds = chunks.map((chunk) => chunk.type).join(",");
+  const call = chunks.find((chunk) => chunk.type === "block-end" && chunk.block.type === "tool-call")?.block;
+  assert.ok(call, `chunks: ${kinds}`);
+  assert.deepEqual({ name: call.name, arguments: JSON.parse(call.arguments) }, { name: "lookup", arguments: { query: "abc", limit: 3 } });
+  assert.equal(chunks.filter((chunk) => chunk.type === "text-delta").map((chunk) => chunk.text).join(""), "let me look");
+  const usage = chunks.find((chunk) => chunk.type === "usage").usage;
+  assert.equal(usage.inputTokens, 1);
+  assert.equal(usage.outputTokens, 7, "message_delta's count replaces message_start's 1");
+  assert.deepEqual(chunks.at(-1).reason, { kind: "tool-calls" });
+  assert.equal(r.attempts(), 1);
+  for (const pid of r.pids()) assert.equal(alive(pid), false);
+}));
+
+test("canRestart is asked again right before the restart: output that arrived during the backoff ends the turn, no second send", () => rig((_attempt, response) => {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  sse(response, START, { type: "ping" }); // first byte, then silence
+}, async (r) => {
+  let asked = 0;
+  await assert.rejects(r.run({ canRestart: () => (asked += 1) === 1 }), /cannot be taken back/); // true at the stall, false after the backoff and acquisition
+  assert.equal(asked, 2, "asked at the stall and again right before the restart");
+  assert.equal(r.attempts(), 1, "the request was not sent again");
+  for (const pid of r.pids()) assert.equal(alive(pid), false, "no process is left running");
+}));
+
 test("one request is sent at most 3 times across both retry layers: a connection that never answers", () => rig(() => { /* never answers */ }, async (r) => {
   await assert.rejects(r.run({ canRestart: () => true }), /already sent 3 times, the most one request is ever sent \(3\)/);
   assert.equal(r.attempts(), MAX_REQUEST_SENDS, "was up to 9 (3 relay attempts x 3 processes)");
@@ -390,6 +433,12 @@ test("plugin apply(): operator config reaches the CLI as the route's limits, rou
     process.env.STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES = "2";
     for await (const chunk of applied.adapter.stream(request([user("again")], { sessionId: "plugin-probe-2" }))) chunks.push(chunk);
     assert.equal(JSON.parse(readFileSync(log, "utf8").trim().split("\n").at(-1)).recoveries, "2");
+    // an EMPTY or blank variable counts as unset: it must not override the valid config value
+    for (const [index, blank] of ["", "   "].entries()) {
+      for (const name of ["IDLE_LIMIT_MS", "FIRST_BYTE_LIMIT_MS", "MAX_RECOVERIES"]) process.env[`STEAK_DSH_CLAUDE_CODE_${name}`] = blank;
+      for await (const chunk of applied.adapter.stream(request([user("blank")], { sessionId: `plugin-probe-blank-${index}` }))) chunks.push(chunk);
+      assert.deepEqual(JSON.parse(readFileSync(log, "utf8").trim().split("\n").at(-1)), { idle: "250000", first: "60000", recoveries: "1" }, `blank ${JSON.stringify(blank)}`);
+    }
   } finally {
     await applied?.close();
     await closeClaudeProcesses();
