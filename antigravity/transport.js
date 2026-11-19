@@ -10,13 +10,20 @@ import { AntigravityError, CODES } from "./errors.js";
 
 const UPLOAD_SLICE = 64 * 1024;
 const UPLOAD_WINDOW = 256 * 1024;
+/** Largest body `text()` reads unless the caller names another cap. */
+export const DEFAULT_BODY_MAX = 1024 * 1024;
+
+const uploaded = new WeakSet();
+/** True when the request body was completely sent before this error: the server may have it, so it is not sent again elsewhere. */
+export const uploadFinished = (error) => typeof error === "object" && error !== null && uploaded.has(error);
+
 const megabytes = (n) => `${(n / 1_048_576).toFixed(1)} MB`;
 
 /**
  * @param {string} url
  * @param {Buffer} body
  * @param {{headers: Record<string,string>, signal?: AbortSignal, limits: {firstByteMs: number, streamIdleMs: number}, label: string}} options
- * @returns {Promise<{status: number, headers: object, chunks: () => AsyncGenerator<Buffer>, text: () => Promise<string>, destroy: () => void}>}
+ * @returns {Promise<{status: number, headers: object, chunks: () => AsyncGenerator<Buffer>, text: (maxBytes?: number) => Promise<string>, destroy: () => void}>}
  */
 export function post(url, body, { headers, signal, limits, label }) {
   const target = new URL(url);
@@ -36,7 +43,11 @@ export function post(url, body, { headers, signal, limits, label }) {
       signal?.removeEventListener("abort", onAbort);
       fn();
     };
-    const fail = (error) => done(() => { request.destroy(); reject(error); });
+    const fail = (error) => done(() => {
+      if (finished && typeof error === "object" && error !== null) uploaded.add(error);
+      request.destroy();
+      reject(error);
+    });
     const onAbort = () => fail(signal?.reason ?? new Error("Antigravity request aborted"));
     const note = () => {
       const now = finished ? total : flushed;
@@ -102,9 +113,14 @@ function wrap(response, request, limits, label, signal) {
     status: response.statusCode ?? 0,
     headers: response.headers,
     chunks,
-    async text() {
+    async text(maxBytes = DEFAULT_BODY_MAX) {
       const parts = [];
-      for await (const chunk of chunks()) parts.push(chunk);
+      let size = 0;
+      for await (const chunk of chunks()) {
+        size += chunk.length;
+        if (size > maxBytes) throw new AntigravityError(`Antigravity ${label}: the reply body is larger than ${maxBytes} bytes; refusing to read more`, CODES.PROTOCOL);
+        parts.push(chunk);
+      }
       return Buffer.concat(parts).toString("utf8");
     },
     destroy() { response.destroy(); request.destroy(); },

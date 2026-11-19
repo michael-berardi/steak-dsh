@@ -1,13 +1,33 @@
 /**
  * Calls to the provider's own endpoints, and nothing else. Endpoints, OAuth URLs and the user agent all come from the
- * operator's config. A request goes to the next configured endpoint only after a transport failure or a 5xx; a 401 is
+ * operator's config. A request goes to the next configured endpoint only after a connection failure before its body had
+ * finished uploading (never once the server may have received it); a 401 is
  * refreshed once; a 429 waits at most the configured bound and is resent at most the configured number of times.
  */
 import { idleLimits } from "../claude-code/idle-policy.js";
-import { AntigravityError, CODES, formatWait, providerMessage, retryAfterFrom } from "./errors.js";
-import { post } from "./transport.js";
+import { AntigravityError, CODES, formatWait, providerMessage, retryAfterFrom, stripControl } from "./errors.js";
+import { DEFAULT_BODY_MAX, post, uploadFinished } from "./transport.js";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
+const TOKEN_REPLY_MAX = DEFAULT_BODY_MAX;
+
+async function readCapped(response, what) {
+  const parts = [];
+  let size = 0;
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > TOKEN_REPLY_MAX) {
+      reader.cancel().catch(() => {});
+      throw new AntigravityError(`Antigravity ${what}: the token endpoint reply is larger than ${TOKEN_REPLY_MAX} bytes; refusing to read more`, CODES.PROTOCOL);
+    }
+    parts.push(value);
+  }
+  return Buffer.concat(parts).toString("utf8");
+}
 
 export const abortableSleep = (ms, signal) => new Promise((resolve, reject) => {
   if (signal?.aborted) { reject(signal.reason ?? new Error("aborted")); return; }
@@ -27,10 +47,11 @@ async function postForm(config, form, what, signal) {
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    throw new AntigravityError(`Antigravity ${what}: cannot reach ${new URL(config.tokenUrl).host} (${error.message})`, CODES.SIGN_IN, { cause: error });
+    throw new AntigravityError(`Antigravity ${what}: cannot reach the token endpoint at ${new URL(config.tokenUrl).host} (${stripControl(error.message)}); check the network and try again`, CODES.HTTP, { cause: error });
   }
-  const text = await response.text();
-  if (!response.ok) throw new AntigravityError(`Antigravity ${what} failed (HTTP ${response.status}): ${providerMessage(text)}`, CODES.SIGN_IN, { status: response.status });
+  const text = await readCapped(response, what);
+  // A 5xx is the endpoint failing, not the grant being refused.
+  if (!response.ok) throw new AntigravityError(`Antigravity ${what} failed (HTTP ${response.status}): ${providerMessage(text)}`, response.status >= 500 ? CODES.HTTP : CODES.SIGN_IN, { status: response.status });
   try { return JSON.parse(text); } catch { throw new AntigravityError(`Antigravity ${what}: the token endpoint did not return JSON`, CODES.PROTOCOL); }
 }
 
@@ -90,11 +111,13 @@ export async function call(config, session, path, payload, label, { signal, time
       });
     } catch (error) {
       if (error instanceof AntigravityError || signal?.aborted) throw error;
-      if (endpointIndex + 1 < config.baseUrls.length) { endpointIndex += 1; continue; }
-      throw new AntigravityError(`Antigravity ${label}: cannot reach ${new URL(base).host} (${error.message})`, CODES.HTTP, { cause: error });
+      // Another endpoint is tried only when the body had not finished uploading: after that the server may have it already.
+      const sent = uploadFinished(error);
+      if (!sent && endpointIndex + 1 < config.baseUrls.length) { endpointIndex += 1; continue; }
+      throw new AntigravityError(`Antigravity ${label}: cannot reach ${new URL(base).host} (${stripControl(error.message)})${sent ? "; the request had been sent, so it was not sent to another endpoint" : ""}`, CODES.HTTP, { cause: error });
     }
     if (reply.status >= 200 && reply.status < 300) return reply;
-    const text = await reply.text().catch(() => "");
+    const text = await reply.text().catch((error) => { if (error instanceof AntigravityError && error.code === CODES.PROTOCOL) throw error; return ""; });
     const message = providerMessage(text);
     if (reply.status === 401) {
       if (!refreshed && session.refresh) {
@@ -118,7 +141,6 @@ export async function call(config, session, path, payload, label, { signal, time
       const spent = rateRetries > 0 ? ` after ${rateRetries} bounded ${rateRetries === 1 ? "wait" : "waits"}` : "";
       throw new AntigravityError(`Antigravity ${quota ? "quota reached" : "rate limit"} (HTTP 429${spent}): ${message}; ${when}`, quota ? CODES.QUOTA : CODES.RATE_LIMITED, { status: 429, retryAfterMs: wait });
     }
-    if (reply.status >= 500 && endpointIndex + 1 < config.baseUrls.length) { endpointIndex += 1; continue; }
     if (reply.status === 403) throw new AntigravityError(`Antigravity refused access (HTTP 403: ${message}). The account may need verification or may lack access to this model; check it in Google's own app, then run \`steak-dsh antigravity login\``, CODES.AUTH_EXPIRED, { status: 403 });
     if (reply.status === 404) throw new AntigravityError(`Antigravity ${label}: not found (HTTP 404: ${message}). The model may not be available to this account; list models again`, CODES.HTTP, { status: 404 });
     throw new AntigravityError(`Antigravity ${label} failed (HTTP ${reply.status}: ${message})`, CODES.HTTP, { status: reply.status });
@@ -127,7 +149,7 @@ export async function call(config, session, path, payload, label, { signal, time
 
 export async function callJson(config, session, path, payload, label, options) {
   const reply = await call(config, session, path, payload, label, options);
-  const text = await reply.text();
+  const text = await reply.text(options?.maxBodyBytes);
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
@@ -138,7 +160,7 @@ export async function callJson(config, session, path, payload, label, options) {
 /** The cloud project requests are billed to: the configured one, or the one the account's own profile names. */
 export async function discoverProject(config, token, signal) {
   if (config.projectId) return config.projectId;
-  const data = await callJson(config, { token, projectId: "" }, "/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY" } }, "project lookup", { signal });
+  const data = await callJson(config, { token, projectId: "" }, "/v1internal:loadCodeAssist", { metadata: { ideType: config.ideType } }, "project lookup", { signal });
   const direct = data.cloudaicompanionProject;
   const id = typeof direct === "string" ? direct : typeof direct?.id === "string" ? direct.id : undefined;
   if (!id) throw new AntigravityError('Antigravity project lookup: the account has no Cloud Code project. Set "projectId" in the Antigravity config file', CODES.SIGN_IN);

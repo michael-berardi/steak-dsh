@@ -117,7 +117,10 @@ export class Translator {
 }
 
 /** Split an SSE byte stream into JSON data payloads. A line that is not valid JSON is a named error, never skipped. */
-export async function* sseData(chunks) {
+/** One SSE line longer than this is refused (16 MiB). */
+export const SSE_LINE_MAX = 16 * 1024 * 1024;
+
+export async function* sseData(chunks, maxLine = SSE_LINE_MAX) {
   let buffer = "";
   const decoder = new TextDecoder();
   const parse = (line) => {
@@ -134,6 +137,7 @@ export async function* sseData(chunks) {
       buffer = buffer.slice(at + 1);
       if (parsed) yield parsed;
     }
+    if (buffer.length > maxLine) throw new AntigravityError(`Antigravity sent a stream line longer than ${maxLine} characters; refusing to buffer more`, CODES.PROTOCOL);
   }
   buffer += decoder.decode();
   if (buffer) { const parsed = parse(buffer); if (parsed) yield parsed; }

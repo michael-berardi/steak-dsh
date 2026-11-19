@@ -2,6 +2,9 @@
 import { callJson } from "./client.js";
 import { AntigravityError, CODES } from "./errors.js";
 
+/** The model list is the one large reply: cap it at 8 MiB. */
+export const MODEL_LIST_MAX_BYTES = 8 * 1024 * 1024;
+
 /** Limits assumed only when the provider's entry names none. Stated in the README. */
 export const ASSUMED_CONTEXT_WINDOW = 128_000;
 export const ASSUMED_MAX_OUTPUT = 8_192;
@@ -27,7 +30,7 @@ export function rowFromEntry(id, entry) {
 }
 
 export async function listModels(config, session, options) {
-  const data = await callJson(config, session, "/v1internal:fetchAvailableModels", { project: session.projectId }, "model list", options);
+  const data = await callJson(config, session, "/v1internal:fetchAvailableModels", { project: session.projectId }, "model list", { maxBodyBytes: MODEL_LIST_MAX_BYTES, ...options });
   const models = data.models;
   if (!models || typeof models !== "object" || Array.isArray(models)) throw new AntigravityError("Antigravity model list: the reply has no `models` object", CODES.PROTOCOL);
   const rows = Object.entries(models).flatMap(([id, entry]) => { const row = rowFromEntry(id, entry); return row ? [row] : []; });
