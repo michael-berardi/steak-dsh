@@ -49,13 +49,13 @@ To remove it, delete the install directory and its command shims, then run
 Already have Node and a supported dsh? Install only the launcher:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.10.6
+npm i -g github:michael-berardi/steak-dsh#v0.11.0
 ```
 
 Or add only the plugin to a profile:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.10.6
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.11.0
 ```
 
 ### From source
@@ -99,6 +99,28 @@ Two optional login-backed routes are included:
 Both routes are text-only, need no gateway flags and cannot be used with `--stock`.
 `steak-dsh models` lists their available models; `--json --provider openai-codex`
 filters machine-readable output. A failed route reports an error and exit status 1.
+
+A third, optional route runs on a Google Antigravity sign-in. It is **off until you turn it
+on**, ships no model, no OAuth client and no account, and with no config file loads nothing.
+
+1. Create `$DSH_HOME/steak-dsh-antigravity.json` (default `~/.dsh/steak-dsh-antigravity.json`) and `chmod 600` it:
+   `{ "enabled": true, "clientId": "<your OAuth client id>", "clientSecret": "<your OAuth client secret>" }`.
+   The client is one you are allowed to use with the service; Steak DSH does not ship one.
+2. `steak-dsh antigravity login` prints a Google sign-in address, captures the loopback callback
+   (or asks you to paste the callback URL on a remote machine) and saves the sign-in, owner-only, in
+   `$DSH_HOME/steak-dsh-antigravity-auth.json`. `steak-dsh antigravity status` and `logout` do what they say.
+3. `steak-dsh models --provider antigravity` lists what your account offers (the list comes from the service),
+   and `steak-dsh run --model antigravity/<model-id> ...` uses one. (Steak Pi's `steak-dsh/<provider>/<model-id>`
+   dispatch declares gateway routes with an API key; it does not run the login-backed routes, so use this one from
+   the `steak-dsh` command.)
+
+Optional config keys: `baseUrls` (https; tried in order only when one cannot be reached), `authUrl`, `tokenUrl`,
+`scopes`, `redirectPort` (default 51121, must match the client's registered redirect), `userAgent`, `projectId`,
+`maxRateLimitWaitMs` (default 30000) and `maxRateLimitRetries` (default 2). The route is text-only (an image is
+named in text, as on the other routes). Named failures: no client in config, a refused refresh (sign in again),
+a 401 (one refresh, one resend, then named), 403, a 429 (waits at most the bound, then says when to retry), a silent
+connection, a stalled upload (not sent again) and a stream cut without a finish reason. Nothing falls back quietly.
+With the route off the cost is one failed file read. See the 0.11.0 changelog entry for what was verified.
 
 ## Checks and profiles
 

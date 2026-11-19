@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.0 - 2026-11-19
+
+Adds an optional Google Antigravity route, built in and off until you configure it.
+
+- **New `antigravity/` route** (`antigravity/<model-id>`): Google sign-in through `steak-dsh antigravity login`, the account's live model list, streamed text, thinking, tool calls (arguments assembled from pieces), usage and stop reasons. Own implementation, plain JavaScript, no new dependency.
+- **Off by default, free when off.** The route registers only when `$DSH_HOME/steak-dsh-antigravity.json` says `"enabled": true`; with no file the plugin reads that one path and imports nothing else. `steak-dsh models` lists it only when it is on.
+- **No model, OAuth client, account or project is shipped.** Ids come from the service; the operator supplies `clientId` and `clientSecret`. A test fails if a model id, an OAuth client or an unexpected host appears in the route's source.
+- **Named failures, no quiet fallbacks:** missing client, mismatched callback, refused refresh, 401 (one refresh, one resend, then named), 403, 429 (bounded wait, bounded retries, then when to retry), thinking on a model without it, a model not in the account's list, a silent connection, a stalled upload (not sent again), a stream cut without a finish reason.
+- Reuses the Claude Code route's wait limits (`idle-policy.js`). The route is text-only: images are named in text, because a bundle adapter receives only an opaque attachment id from the harness.
+- `--stock` and `--base-url` are refused for `antigravity/...` as for the other routes. 38 new tests (35 against a local fake server, 3 more inside a real `dsh` headless run, one of them a tool round); no real Google call is made by the suite.
+
 ## 0.10.6 - 2026-11-19
 
 Fixes a stall in the Claude Code route when the uplink is slow, and removes a leftover waiting-status setting.
