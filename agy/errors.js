@@ -22,3 +22,11 @@ export class AgyError extends Error {
 export const INSTALL_COMMAND = "curl -fsSL https://antigravity.google/cli/install.sh | bash";
 export const MISSING_MESSAGE = `agy (Google's Antigravity CLI) is not installed. Install it with: ${INSTALL_COMMAND}`;
 export const SIGN_IN_HINT = "run agy once to sign in";
+
+/** Text from agy that is safe to show: URLs (a sign-in link is a credential) and control characters removed. */
+export function cleanAgyText(text) {
+  return String(text ?? "")
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S*/gi, "[link removed]")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/g, " ")
+    .replace(/[ \t]{2,}/g, " ");
+}

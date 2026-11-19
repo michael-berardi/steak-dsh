@@ -4,15 +4,15 @@
  * agy runs its own tools. A `tool` step is therefore shown as progress text, never as a harness tool call (the
  * harness would execute it a second time). The answer is the text agy streams in `agent_response` steps.
  */
-import { AgyError, CODES, SIGN_IN_HINT } from "./errors.js";
+import { AgyError, CODES, SIGN_IN_HINT, cleanAgyText } from "./errors.js";
 
 const PROGRESS_PARAM_MAX = 120;
 const AUTH = /authenticat|sign[ -]?in|signed in|log ?in\b|unauthenticated|credential/i;
 const BAD_MODEL = /not recognized as a known model|invalid model selection|unknown model|not available (?:on|for|in) your|does not have access|not entitled/i;
 const TIMED_OUT = /timed out|timeout|deadline exceeded/i;
 
-const flat = (text) => String(text ?? "").replace(/\s+/g, " ").trim();
-const firstLine = (text) => String(text ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+const flat = (text) => cleanAgyText(text).replace(/\s+/g, " ").trim();
+const firstLine = (text) => cleanAgyText(text).split("\n").map((l) => l.trim()).find(Boolean) ?? "";
 
 /** Token counts in the harness's disjoint form: agy's input_tokens includes the cached part. */
 export function mapUsage(usage) {
@@ -46,7 +46,7 @@ export function progressLine(step) {
  */
 export function errorForResult(result, model) {
   const status = String(result?.status ?? "missing");
-  const text = String(result?.error ?? "").trim();
+  const text = cleanAgyText(result?.error).trim();
   switch (status) {
     case "ERROR": {
       if (AUTH.test(text)) return new AgyError(`agy is not signed in: ${flat(text)}; ${SIGN_IN_HINT}`, CODES.NOT_SIGNED_IN);

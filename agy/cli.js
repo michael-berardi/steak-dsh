@@ -1,6 +1,6 @@
 /**
  * Running Google's official Antigravity CLI (`agy`) the way Google documents for scripting: `agy models` for the list,
- * `agy -p <prompt> --output-format stream-json` for a run. agy keeps its own tools, permissions and sign-in; this file
+ * `agy --input-format stream-json --output-format stream-json` (prompt on stdin, never argv) for a run. agy keeps its own tools, permissions and sign-in; this file
  * only starts it, reads its documented NDJSON and stops it. It never passes --dangerously-skip-permissions.
  */
 import { spawn } from "node:child_process";
@@ -8,7 +8,7 @@ import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { AgyError, CODES, INSTALL_COMMAND, MISSING_MESSAGE, SIGN_IN_HINT } from "./errors.js";
+import { AgyError, CODES, cleanAgyText, INSTALL_COMMAND, MISSING_MESSAGE, SIGN_IN_HINT } from "./errors.js";
 
 /** Bounded stop: SIGINT first, then SIGTERM, then SIGKILL, each to the whole process group. */
 export const STOP_STEPS_MS = Object.freeze({ interrupt: 3_000, terminate: 2_000 });
@@ -17,6 +17,8 @@ const TAIL_BYTES = 16_384;
 const SIGNED_OUT_STDERR = /Authentication required/i;
 const AUTH_TEXT = /authenticat|sign[ -]?in|signed in|log ?in\b|unauthenticated|credential/i;
 const NOTICE = /\b(denied|permission|allow)\b/i;
+const DRAIN_MS = 500;
+
 
 export const configuredCommand = (env) => (env.STEAK_DSH_AGY_BIN && env.STEAK_DSH_AGY_BIN.trim()) || "agy";
 
@@ -44,7 +46,7 @@ export async function resolveAgy(env = process.env) {
 const tail = (text, chunk) => (text + chunk).slice(-TAIL_BYTES);
 
 export function notSignedIn(cause) {
-  const text = String(cause ?? "").trim().replace(/\s+/g, " ");
+  const text = cleanAgyText(cause).trim().replace(/\s+/g, " ");
   return new AgyError(`agy is not signed in${text ? `: ${text}` : ""}; ${SIGN_IN_HINT}`, CODES.NOT_SIGNED_IN);
 }
 
@@ -66,14 +68,38 @@ export function stopGroup(child, steps = STOP_STEPS_MS) {
 }
 
 function spawnAgy(command, args, { cwd, env }) {
-  return spawn(command, args, { cwd, env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+  return spawn(command, args, { cwd, env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
 }
+
+/** SIGKILL the child's whole process group (tool processes agy started); an empty group (ESRCH) is fine. */
+export function killGroup(child) {
+  if (child.pid === undefined) return;
+  try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already empty */ }
+}
+
+/** After agy's exit: kill leftover group members, give the pipes a moment to drain, then destroy them. */
+function reap(child) {
+  killGroup(child);
+  return new Promise((done) => {
+    const pipes = [child.stdout, child.stderr].filter((p) => p && !p.destroyed && !p.readableEnded);
+    const finish = () => { clearTimeout(timer); for (const p of [child.stdin, child.stdout, child.stderr]) p?.destroy(); done(); };
+    const timer = setTimeout(finish, DRAIN_MS);
+    let open = pipes.length;
+    if (!open) { finish(); return; }
+    for (const p of pipes) p.once("close", () => { if (--open === 0) finish(); });
+  });
+}
+
+/** The one stream-json line agy reads from stdin for a prompt. */
+export const promptLine = (prompt) => `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`;
 
 /** Run `agy <args>` to the end and capture it (used for `agy models`). */
 async function capture(env, args, { signal, timeoutMs = 30_000 } = {}) {
   const command = await resolveAgy(env);
   signal?.throwIfAborted();
   const child = spawnAgy(command, args, { cwd: undefined, env });
+  child.stdin.on("error", () => {});
+  child.stdin.end();
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
@@ -88,7 +114,7 @@ async function capture(env, args, { signal, timeoutMs = 30_000 } = {}) {
   try {
     const code = await new Promise((resolveExit, reject) => {
       child.once("error", reject);
-      child.once("close", (c) => resolveExit(c));
+      child.once("exit", (c) => { void reap(child).then(() => resolveExit(c)); });
     });
     if (reason === "timeout") throw new AgyError(`agy ${args.join(" ")} timed out after ${timeoutMs} ms`, CODES.TIMEOUT);
     if (reason === "abort") throw new AgyError(`agy ${args.join(" ")} was cancelled`, CODES.CANCELLED);
@@ -144,11 +170,11 @@ export async function agyStatus(env = process.env, options = {}) {
 }
 
 /**
- * One `agy -p` run. Resolves { result, stderr } with agy's terminal `result` object; rejects with a named AgyError.
+ * One headless agy run: `input` (the prompt) goes to stdin as one stream-json user event, then stdin is closed. Resolves { result, stderr } with agy's terminal `result` object; rejects with a named AgyError.
  * `onEvent` gets every parsed NDJSON event; `onNotice` gets stderr lines that look like permission notices.
  * The returned promise settles only after the process group has exited.
  */
-export function runAgy({ command, args, cwd, env, signal, timeoutMs, onEvent, onNotice }) {
+export function runAgy({ command, args, input, cwd, env, signal, timeoutMs, onEvent, onNotice }) {
   return new Promise((resolvePromise, rejectPromise) => {
     let child;
     try { signal?.throwIfAborted(); child = spawnAgy(command, args, { cwd, env }); } catch (error) { rejectPromise(error); return; }
@@ -166,6 +192,8 @@ export function runAgy({ command, args, cwd, env, signal, timeoutMs, onEvent, on
     const onAbort = () => fail(new AgyError("agy run cancelled", CODES.CANCELLED));
     signal?.addEventListener("abort", onAbort, { once: true });
 
+    child.stdin.on("error", () => { /* agy left before reading the prompt; its exit explains why */ });
+    child.stdin.end(promptLine(input ?? ""));
     child.on("error", (error) => {
       fail(error?.code === "ENOENT" || error?.code === "EACCES"
         ? new AgyError(MISSING_MESSAGE, CODES.MISSING, { cause: error })
@@ -177,7 +205,7 @@ export function runAgy({ command, args, cwd, env, signal, timeoutMs, onEvent, on
       // Signed out, agy waits a minute for a browser sign-in nobody can do here. Stop at once and say so.
       // It gets a moment to write its own result and leave first, so its own words can be the cause shown.
       if (!failure && !authTimer && SIGNED_OUT_STDERR.test(stderr)) authTimer = setTimeout(() => fail(notSignedIn("agy said \"Authentication required\"")), AUTH_GRACE_MS);
-      for (const line of chunk.split("\n")) if (NOTICE.test(line) && line.trim()) onNotice?.(line.trim());
+      for (const line of chunk.split("\n")) if (NOTICE.test(line) && line.trim()) onNotice?.(cleanAgyText(line).trim());
     });
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on("line", (line) => {
@@ -187,24 +215,29 @@ export function runAgy({ command, args, cwd, env, signal, timeoutMs, onEvent, on
       if (event?.event === "result" && event.result && typeof event.result === "object") result = event.result;
       try { onEvent?.(event); } catch (error) { fail(error); }
     });
-    child.on("close", (code, killedBy) => {
+    let finalized = false;
+    const finalize = (code, killedBy) => {
+      if (finalized) return;
+      finalized = true;
       clearTimeout(timer);
       clearTimeout(authTimer);
       signal?.removeEventListener("abort", onAbort);
-      if (failure) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already empty */ } }
-      void Promise.resolve(stopping).then(() => {
+      // Always (success too): nothing agy started may outlive it, and a grandchild holding stdout must not hang us.
+      void Promise.all([reap(child), stopping]).then(() => {
         if (failure) {
           // Stopped while signed out: agy's own result text, when it got to write one, is the cause to show.
           rejectPromise(failure.code === CODES.NOT_SIGNED_IN && result?.error ? notSignedIn(result.error) : failure);
           return;
         }
         if (result) { resolvePromise({ result, stderr, exitCode: code }); return; }
-        const said = `${stderr}\n${stray}`.trim().split("\n").filter(Boolean).at(-1) ?? "";
+        const said = cleanAgyText(`${stderr}\n${stray}`).trim().split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
         if (AUTH_TEXT.test(stderr)) { rejectPromise(notSignedIn(said)); return; }
         rejectPromise(new AgyError(`agy exited ${killedBy ? `from ${killedBy}` : `with code ${code}`} without a result event${said ? `: ${said}` : ""}`, CODES.FAILED));
       });
-    });
+    };
+    child.on("exit", finalize);
+    child.on("error", () => { if (child.pid === undefined) finalize(null, null); }); // never started: no exit event will come
   });
 }
 
-export { AUTH_TEXT, INSTALL_COMMAND };
+export { AUTH_TEXT, INSTALL_COMMAND, cleanAgyText };

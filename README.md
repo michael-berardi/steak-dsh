@@ -109,21 +109,23 @@ sign-in; Steak DSH ships no model, no OAuth client and no credentials.
 1. Install agy: `curl -fsSL https://antigravity.google/cli/install.sh | bash`
 2. Sign in once by running `agy` interactively. Headless runs use that cached sign-in; they cannot sign in.
 3. `steak-dsh models --provider agy` prints `agy/<id>` for what `agy models` lists. Your plan decides the list.
-4. `steak-dsh run --model agy/gemini-4-neon-high "your task"` (the id is whatever step 3 printed; `chat` and `tui` work the same).
+4. `steak-dsh run --model agy/<model-id> "your task"` (use an id that `steak-dsh models --provider agy` printed; `chat` and `tui` work the same).
 
 **Tool calls run inside agy, under agy's permission rules.** agy keeps its own agent loop, its own tools (shell, file
-edits, MCP) and its own `settings.json` permission rules; the dsh harness does not run them. By default agy asks
-before shell commands and file writes, and with no one to ask in a headless run it denies them softly (the run goes
-on and agy prints a notice, which Steak DSH passes to stderr). To let a tool run, add an `allow` rule in agy's
-settings (<https://antigravity.google/docs/cli/permissions>). Steak DSH never passes `--dangerously-skip-permissions`.
+edits, MCP) and its own `settings.json` permission rules; the dsh harness does not run them. agy runs its own tools under
+agy's permission rules, outside Steak DSH's approvals. Steak DSH never passes --dangerously-skip-permissions, so agy's
+default permissions apply: per Google's docs, actions that need approval are not approved in headless mode (the run
+continues without them); allow tools ahead of time with permissions.allow in ~/.gemini/antigravity-cli/settings.json
+(<https://antigravity.google/docs/cli/permissions>). Any notice agy prints about this goes to stderr.
+This route was tested only with a fake agy and a signed-out agy, never a signed-in one.
 Each agy tool step appears in the reply as a progress line such as `[agy tool: run_command echo hi]`, not as a
 harness tool call, so the harness's own tools, `--permission` presets, `--owned-path` and verify-after-edit do not
 govern what agy does. agy runs in the directory you launched from, with that directory added to its workspace.
 
-How a run works: one `agy -p <prompt> --model <id> --output-format stream-json --add-dir <cwd>` per turn
+How a run works: one `agy --input-format stream-json --output-format stream-json --model <id> --add-dir <cwd>` per turn, with the prompt sent on stdin as one stream-json user event (never on the command line)
 (`--effort` when you pass `--effort`; `off` is sent as `low`, since agy has no off). The text agy streams is the reply;
 token usage and the final status come from agy's `result` event. A later turn resumes agy's own conversation
-(`--conversation <id>`) and sends only what you said since. Abort sends SIGINT to agy's process group, then SIGTERM
+(`--conversation <id>`) and sends only what you said since; without one, earlier turns are replayed as text, capped at 200 KB with the oldest turns dropped first (the prompt says so). When agy exits, its whole process group is killed so tools it started cannot outlive it. Text from agy that is shown (errors, notices) has URLs and control characters removed, so a sign-in link never appears. Abort sends SIGINT to agy's process group, then SIGTERM
 after 3 s and SIGKILL after 2 s more. The route is text-only (an image is refused, named). Optional plugin config
 (`steak-agy-route` row): `command` (the agy path; or set `STEAK_DSH_AGY_BIN`) and `timeoutMs` (or
 `STEAK_DSH_AGY_TIMEOUT_MS`; default none, as in agy).

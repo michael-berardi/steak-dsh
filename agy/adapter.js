@@ -1,5 +1,5 @@
 /**
- * The model route: each request runs one headless `agy -p` on the operator's own agy sign-in. agy keeps its own agent
+ * The model route: each request runs one headless agy (prompt on stdin) on the operator's own agy sign-in. agy keeps its own agent
  * loop, tools and permission rules; the harness gets the text agy streams, with agy's tool steps shown as progress.
  * Nothing is started until a model is listed or a request is made, so a machine without agy pays nothing.
  */
@@ -9,6 +9,8 @@ import { AgyTranslator } from "./stream.js";
 
 export const PROVIDER_ID = "agy";
 const CATALOG_TTL_MS = 5 * 60_000;
+/** Most bytes of earlier conversation replayed to a fresh agy conversation. */
+export const REPLAY_MAX_BYTES = 200_000;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 /** agy's own effort levels. "off" is not one of them: the nearest is low. */
 export const EFFORT_LEVELS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
@@ -59,7 +61,13 @@ export function buildPrompt(messages) {
   } else if (conversationId) {
     prompt = users.map((m) => textOf(m.content, "user")).join("\n\n");
   } else {
-    prompt = fresh.map((m) => `${m.role === "assistant" ? "Assistant" : m.role === "tool" ? "Tool result" : "User"}: ${textOf(m.content, m.role)}`).join("\n\n");
+    const lines = fresh.map((m) => `${m.role === "assistant" ? "Assistant" : m.role === "tool" ? "Tool result" : "User"}: ${textOf(m.content, m.role)}`);
+    // Cap the replayed history by bytes: oldest turns go first; the newest turn is always sent whole.
+    let kept = lines.length - 1;
+    let bytes = Buffer.byteLength(lines[kept]);
+    while (kept > 0 && bytes + 2 + Buffer.byteLength(lines[kept - 1]) <= REPLAY_MAX_BYTES) { kept -= 1; bytes += 2 + Buffer.byteLength(lines[kept]); }
+    const dropped = kept;
+    prompt = (dropped ? [`[Steak DSH: the ${dropped} oldest turn${dropped === 1 ? "" : "s"} of this conversation were left out to keep the prompt under ${REPLAY_MAX_BYTES} bytes.]`] : []).concat(lines.slice(kept)).join("\n\n");
   }
   if (!prompt.trim()) throw new AgyError("agy request has no text to send", CODES.BAD_REQUEST);
   return { prompt, conversationId };
@@ -137,12 +145,14 @@ export function createAgyAdapter(harness, { env = () => process.env, timeoutMs, 
         translator = new AgyTranslator(options.model);
         request = {
           // Never --dangerously-skip-permissions: agy's own permission rules decide what its tools may do.
+          // The prompt goes to stdin as one stream-json user event, never argv (size limits, flag-looking text, ps).
           args: [
-            "-p", prompt, "--model", options.model, "--output-format", "stream-json", "--disable-slash-commands",
+            "--input-format", "stream-json", "--output-format", "stream-json", "--model", options.model, "--disable-slash-commands",
             ...(effort ? ["--effort", effort] : []),
             "--add-dir", cwd,
             ...(conversationId ? ["--conversation", conversationId] : []),
           ],
+          input: prompt,
           cwd,
           env: env(),
           signal,

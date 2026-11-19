@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // A fake `agy` for the route tests: prints stream-json shaped exactly like Google's headless-mode docs.
-// FAKE_AGY_MODE: text | tool | error | canceled | interrupted | invalid | badmodel | signedout | signedout-hang | hang | hang-stubborn | silent-exit
+// Like the real agy in stream-json mode, it reads the prompt from stdin: one {"event":"user","message":{"content":"..."}} line.
+// FAKE_AGY_MODE: grandchild (success, but leaves a SIGINT/SIGTERM-proof grandchild holding stdout) | leak (a sign-in URL in every text channel) | text | tool | error | canceled | interrupted | invalid | badmodel | signedout | signedout-hang | hang | hang-stubborn | silent-exit
 // FAKE_AGY_LOG: a file that gets one JSON line per launch ({argv, cwd, pid, child}).
 import { appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -31,7 +32,14 @@ if (argv[0] === "models") {
   process.exit(0);
 }
 
-const prompt = argv[argv.indexOf("-p") + 1];
+let stdin = "";
+if (argv[0] !== "models") {
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) stdin += chunk;
+}
+const events = stdin.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const prompt = events[0]?.message?.content;
+if (process.env.FAKE_AGY_LOG && argv[0] !== "models") appendFileSync(process.env.FAKE_AGY_LOG, `${JSON.stringify({ stdin: { events: events.length, prompt } })}\n`);
 switch (mode) {
   case "text":
     init();
@@ -51,6 +59,20 @@ switch (mode) {
     step({ step_index: 3, state: "DONE", step_type: "tool", tool_name: "write_to_file", tool_info: { name: "write_to_file", parameters: { TargetFile: "/x" }, error: { type: "permission_denied", message: "denied by rule" } } });
     step({ step_index: 4, state: "DONE", step_type: "agent_response", text_delta: "It printed hello_headless_demo.\n" });
     result("SUCCESS", "Let me check.It printed hello_headless_demo.\n");
+    break;
+  case "grandchild": {
+    init();
+    const gc = spawn(process.execPath, ["-e", "process.on('SIGINT',()=>{});process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdio: ["ignore", "inherit", "inherit"] });
+    gc.unref();
+    if (process.env.FAKE_AGY_LOG) appendFileSync(process.env.FAKE_AGY_LOG, `${JSON.stringify({ grandchild: gc.pid })}\n`);
+    step({ step_index: 2, state: "DONE", step_type: "agent_response", text_delta: "done\n" });
+    result("SUCCESS", "done\n");
+    break;
+  }
+  case "leak":
+    process.stderr.write("Authentication required. Visit https://accounts.google.com/o/oauth2/auth?client_id=abc&state=\u001b[31msecret to log in\n");
+    result("ERROR", "", "sign in at https://accounts.google.com/o/oauth2/auth?x=y\u0007 failed", zero);
+    process.exitCode = 1;
     break;
   case "error": init(); result("ERROR", "", process.env.FAKE_AGY_ERROR ?? "model quota exhausted", zero); process.exitCode = 1; break;
   case "badmodel": result("ERROR", "", `invalid model selection (--model "${argv[argv.indexOf("--model") + 1]}" --effort ""): model is not recognized as a known model or custom model in settings\nAvailable models:\n Gemini 3.6 Flash (High)\n ...`, zero); process.exitCode = 1; break;
