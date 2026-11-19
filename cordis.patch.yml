@@ -62,3 +62,11 @@
     - id: steak-codex-route
       name: ./plugins/codex-route.js
       config: {}
+    # A model route that runs requests on a Google Antigravity sign-in (see README). Off until
+    # $DSH_HOME/steak-dsh-antigravity.json says "enabled": true: with no file it reads that one path and loads nothing,
+    # registers no model and ships no OAuth client. Switch it off entirely from your profile patch with
+    #   - id: steak-antigravity-route
+    #     disabled: true
+    - id: steak-antigravity-route
+      name: ./plugins/antigravity-route.js
+      config: {}
