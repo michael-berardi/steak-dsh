@@ -9,6 +9,7 @@ Runs Gemini models through Google's official Antigravity CLI (`agy`) and removes
 - **Named errors:** agy missing (with `curl -fsSL https://antigravity.google/cli/install.sh | bash`), not signed in (agy's own text plus `run agy once to sign in`; a run stops at once instead of waiting out agy's 60 s browser sign-in), plan lacks the model, timeout, cancelled.
 - **Removed: the `antigravity/` route**, `steak-dsh antigravity login|status|logout`, its plugin row, config and tests. Google's terms forbid third-party software accessing Antigravity with its OAuth. If `$DSH_HOME/steak-dsh-antigravity.json` exists, `doctor` and `--model antigravity/...` print one line saying so and pointing at `--model agy/<id>`.
 - Not verified against a signed-in agy (needs a Pro or Ultra plan): the suite uses a fake `agy` that prints the stream-json from Google's documentation; the real signed-out binary was run for `models` and `run`. agy permissions: Steak DSH never passes `--dangerously-skip-permissions`; per Google's docs, actions needing approval are not approved in headless mode, and tools can be allowed with `permissions.allow` in `~/.gemini/antigravity-cli/settings.json`.
+- **A steak-dsh that is hung up or terminated takes its running agy with it** (agy and every tool process it started), then ends the way the signal asked.
 
 ## 0.12.0 - 2026-11-19
 

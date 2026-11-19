@@ -418,3 +418,30 @@ test("dsh headless: a signed-out agy fails the run with the named cause", { skip
   assert.notEqual(status, 0);
   assert.match(stderr + stdout, /run agy once to sign in/);
 });
+
+test("cleanup: a steak-dsh that is hung up or terminated takes the running agy group with it", { timeout: 30_000 }, async (t) => {
+  for (const signal of ["SIGTERM", "SIGHUP"]) {
+    const dir = scratch();
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const log = join(dir, "fake.log");
+    // A stand-in host: runs one agy turn through the real adapter and is then signalled mid-run.
+    const host = join(dir, "host.mjs");
+    writeFileSync(host, [
+      `import { loadHarness } from ${JSON.stringify(new URL("../claude-code/harness.js", import.meta.url).href)};`,
+      `import { createAgyAdapter } from ${JSON.stringify(new URL("../agy/adapter.js", import.meta.url).href)};`,
+      `const adapter = createAgyAdapter(await loadHarness(), { env: () => process.env });`,
+      `for await (const _ of adapter.stream({ provider: "agy", model: "m", tools: [], messages: [{ role: "user", id: "u", source: { kind: "user" }, content: [{ type: "text", text: "hi" }] }] })) {}`,
+    ].join("\n"));
+    const child = spawn(process.execPath, [host], { env: { PATH: process.env.PATH, HOME: dir, STEAK_DSH_AGY_BIN: FAKE, FAKE_AGY_MODE: "hang-stubborn", FAKE_AGY_LOG: log }, stdio: "ignore" });
+    let launched;
+    for (let i = 0; i < 100 && !(launched = readLog(log)[0]?.child); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.ok(launched, "agy and its tool process started");
+    const agyPid = readLog(log)[0].pid;
+    const closed = new Promise((r) => child.once("exit", (code, sig) => r(sig)));
+    child.kill(signal);
+    assert.equal(await closed, signal, `the host still ends by ${signal}`);
+    for (let i = 0; i < 30 && (alive(agyPid) || alive(launched)); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(alive(agyPid), false, `agy was killed on ${signal}`);
+    assert.equal(alive(launched), false, `agy's tool process was killed on ${signal}`);
+  }
+});

@@ -67,8 +67,31 @@ export function stopGroup(child, steps = STOP_STEPS_MS) {
   });
 }
 
+/** agy children still running: each leads its own process group, so it would outlive steak-dsh unless killed here. */
+const live = new Set();
+let guarded = false;
+/** A steak-dsh that exits, or is hung up or terminated, takes the agy groups it started with it. */
+function guardExit() {
+  if (guarded) return;
+  guarded = true;
+  process.on("exit", () => { for (const child of live) killGroup(child); });
+  for (const signal of ["SIGHUP", "SIGTERM"]) {
+    const onSignal = () => {
+      for (const child of live) killGroup(child);
+      // Only listener: leave and re-raise, so the process ends the way the signal asked. Otherwise others decide.
+      if (process.listenerCount(signal) === 1) { process.removeListener(signal, onSignal); process.kill(process.pid, signal); }
+    };
+    process.on(signal, onSignal);
+  }
+}
+
 function spawnAgy(command, args, { cwd, env }) {
-  return spawn(command, args, { cwd, env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
+  guardExit();
+  const child = spawn(command, args, { cwd, env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
+  live.add(child);
+  child.once("exit", () => live.delete(child));
+  child.once("error", () => live.delete(child));
+  return child;
 }
 
 /** SIGKILL the child's whole process group (tool processes agy started); an empty group (ESRCH) is fine. */
@@ -144,7 +167,7 @@ export async function listAgyModels(env = process.env, options = {}) {
   if (code !== 0) {
     const line = said.find((l) => /^error:/i.test(l)) ?? said.at(-1) ?? `exited ${code}`;
     if (AUTH_TEXT.test(line)) throw notSignedIn(line.replace(/^error:\s*/i, ""));
-    throw new AgyError(`agy models failed (exit ${code}): ${line.replace(/^error:\s*/i, "")}`, CODES.FAILED);
+    throw new AgyError(`agy models failed (exit ${code}): ${cleanAgyText(line.replace(/^error:\s*/i, ""))}`, CODES.FAILED);
   }
   const rows = [];
   const seen = new Set();
