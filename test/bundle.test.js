@@ -14,7 +14,7 @@ test("the package is a dsh bundle and ships every file its patch names", () => {
   const names = [...patch.matchAll(/name:\s*(\.\/\S+)/g)].map((m) => m[1]);
   assert.ok(names.length >= 3);
   for (const name of names) assert.ok(existsSync(join(root, name)), `${name} missing`);
-  for (const entry of ["plugins", "claude-code", "codex", "cordis.patch.yml", "long.patch.yml"]) assert.ok(pkg.files.includes(entry), `${entry} is not shipped`);
+  for (const entry of ["plugins", "claude-code", "codex", "antigravity", "cordis.patch.yml", "long.patch.yml"]) assert.ok(pkg.files.includes(entry), `${entry} is not shipped`);
   assert.ok(existsSync(join(root, "long.patch.yml")), "long.patch.yml missing");
 });
 
@@ -25,6 +25,7 @@ test("plugins import nothing outside Node, so they load from any profile", () =>
       // The one allowed relative import: the entry of the CLI-backed route, which has its own folder.
       if (file === "cc-route.js" && match[1] === "../claude-code/plugin.js") continue;
       if (file === "codex-route.js" && match[1] === "../codex/plugin.js") continue;
+      if (file === "antigravity-route.js" && match[1] === "../antigravity/plugin.js") continue;
       assert.match(match[1], /^node:/, `${file} imports ${match[1]}`);
     }
   }
@@ -44,6 +45,11 @@ test("the patch row for the route names only its neutral entry file", () => {
   const patch = readFileSync(join(root, "cordis.patch.yml"), "utf8");
   assert.match(patch, /id: steak-cc-route\n\s+name: \.\/plugins\/cc-route\.js/);
   assert.match(patch, /id: steak-codex-route\n\s+name: \.\/plugins\/codex-route\.js\n\s+config: \{\}/, "the row carries no model, endpoint or login setting");
+});
+
+test("the Antigravity row names only its neutral entry file and carries no client, endpoint or model", () => {
+  const patch = readFileSync(join(root, "cordis.patch.yml"), "utf8");
+  assert.match(patch, /id: steak-antigravity-route\n\s+name: \.\/plugins\/antigravity-route\.js\n\s+config: \{\}/);
 });
 
 test("rules register one section and can be replaced or emptied", () => {
