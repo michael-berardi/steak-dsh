@@ -1,6 +1,9 @@
 import { ClaudeCodeError, CODES } from "./errors.js";
 
-/** A terminal local wait failure, not a suggestion to replay a charged turn. */
+/**
+ * A local wait failure. `kind: "idle"` is a silent model or connection, which the route may recover by asking again (only
+ * while nothing was handed over and the reply was not complete); every other kind is terminal.
+ */
 export class ClaudeWaitLimitError extends ClaudeCodeError {
   /** "idle": the model or connection went silent mid-turn, which a fresh attempt can fix. Anything else is a local wait. */
   kind;
@@ -11,6 +14,8 @@ export class ClaudeWaitLimitError extends ClaudeCodeError {
   childAlive;
   bytesReceived;
   recoveries;
+  /** The API had already sent the whole reply (message_stop) when the silence hit: asking again would pay for it twice. */
+  replyComplete;
 
   constructor(message, details = {}) {
     super(message, CODES.WAIT_LIMIT);

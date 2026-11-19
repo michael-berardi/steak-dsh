@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.10.4 - 2026-11-18
 
 - **A quiet or stalled Claude Code turn no longer ends the run.** The route had one 180 s silence limit for every stage. Now: a connection that never answers is retried quietly at the first-byte limit (about 54 s at the default budget); once the reply is streaming the idle limit is 1.4 to 1.8 times the budget, scaled up for high reasoning effort and large requests; and a stalled process is stopped and the turn asked again from the same history, at most twice, while nothing of the reply has reached the harness (what was already handed over cannot be taken back, so that case ends with a named error). Claude Code only generates, so asking again repeats no tool call. The final error names the silence, the last event, whether the process was alive and how many recoveries were tried. Set `idleLimitMs`, `firstByteLimitMs` and `maxRecoveries` in the plugin config, or `STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS`, `STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS` and `STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES`.
+- **Review fixes to that change.**
+  - With `onEvent` set and no `canRestart`, output is assumed already delivered, so a caller that does not say otherwise can never see a reply twice. The route's adapter is tested end to end, recording the chunks the harness receives.
+  - A reply the API already finished (`message_stop` received) is never asked for again: if Claude Code then goes quiet, the turn finishes from the received reply and the hung process is dropped.
+  - One request is sent at most 3 times in all, across the relay's quiet retries and the process recoveries (it was up to 9). The unproven "a retry costs nothing" claim is gone. `maxRecoveries` is now 0 to 2.
+  - Limits are rounded first, then must be 1000 ms to 2147483647 ms, and the native queue limit is capped at the largest Node timer. The plugin checks its config when it is applied and names a bad value; the limits are worked out before a process is acquired. Tests apply the real plugin and read the environment its adapter hands Claude Code.
 
 ## 0.10.3 - 2026-11-15
 

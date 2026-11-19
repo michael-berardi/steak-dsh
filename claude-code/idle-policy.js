@@ -10,6 +10,17 @@
  * the reasoning effort it asks for. All of them can be set from the environment (see the STEAK_DSH_CLAUDE_CODE_* names).
  */
 
+/** Largest timer Node accepts: a longer delay fires after 1 ms, which would read as an instant stall. */
+export const MAX_TIMER_MS = 2_147_483_647;
+/** Smallest limit the environment or plugin config may set: anything shorter cuts a healthy turn, and 0 would end it at once. */
+export const MIN_LIMIT_MS = 1_000;
+/**
+ * The most times one request is ever sent to the API, across both retry layers: the relay's quiet retry before the
+ * first byte and the route's recovery with a fresh process draw from this one budget, so the worst case is 3 sends
+ * (not 3 relay attempts x 3 processes = 9). It cannot be raised from the environment.
+ */
+export const MAX_REQUEST_SENDS = 3;
+
 const EFFORT_RANK = { low: 1, medium: 2, high: 3, xhigh: 4, max: 4 };
 
 /** Effort on a 0 (none stated) to 4 scale. */
@@ -33,22 +44,34 @@ export function requestShape(body) {
   return shape;
 }
 
-function envMs(env, name) {
-  const raw = env[name];
-  if (raw === undefined || raw.trim() === "") return undefined;
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647) {
-    throw new Error(`${name} must be a positive number of milliseconds (at most 2147483647)`);
+/** A limit in milliseconds, checked after rounding: at least MIN_LIMIT_MS and at most MAX_TIMER_MS, or a named error. */
+export function checkedMs(name, raw) {
+  const value = Math.round(Number(raw));
+  if (!Number.isFinite(value) || value < MIN_LIMIT_MS || value > MAX_TIMER_MS) {
+    throw new Error(`${name} must be a number of milliseconds from ${MIN_LIMIT_MS} to ${MAX_TIMER_MS} (got ${JSON.stringify(raw)})`);
   }
   return value;
 }
 
+/** A recovery count: a whole number from 0 to MAX_REQUEST_SENDS - 1 (a request is sent at most MAX_REQUEST_SENDS times in all). */
+export function checkedCount(name, raw) {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > MAX_REQUEST_SENDS - 1) {
+    throw new Error(`${name} must be a whole number from 0 to ${MAX_REQUEST_SENDS - 1} (a request is sent at most ${MAX_REQUEST_SENDS} times in all)`);
+  }
+  return value;
+}
+
+function envMs(env, name) {
+  const raw = env[name];
+  if (raw === undefined || String(raw).trim() === "") return undefined;
+  return checkedMs(name, raw);
+}
+
 function envCount(env, name) {
   const raw = env[name];
-  if (raw === undefined || raw.trim() === "") return undefined;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0 || value > 10) throw new Error(`${name} must be a whole number from 0 to 10`);
-  return value;
+  if (raw === undefined || String(raw).trim() === "") return undefined;
+  return checkedCount(name, raw);
 }
 
 /**
@@ -56,11 +79,13 @@ function envCount(env, name) {
  *
  * `timeoutMs` is the caller's idle budget (the caller supplies it; the route defaults to 180 000). Without overrides:
  *  - stream idle = 1.4 x budget, +0.1 per effort step, +0.1 for a very large context, capped at 1.8 x budget
- *    (420 s to 540 s for Pi's default), so a quiet but alive turn is not cut at the old 300 s;
- *  - first byte = 0.3 x budget, widened by effort (+15% a step) and context (up to +50%): 90 s to about 190 s,
- *    short because the API answers a healthy request at once and a retry costs nothing before the first byte.
+ *    (252 s to 324 s at the default 180 s budget), so a quiet but alive turn is not cut at the old limit;
+ *  - first byte = 0.3 x budget, widened by effort (+15% a step) and context (up to +50%): 54 s to about 115 s at the
+ *    default budget, short because the API answers a healthy request at once. A resend is not free (it can bill the
+ *    request again), so every resend, at either layer, comes out of one budget of MAX_REQUEST_SENDS (3) sends.
  * Environment overrides are absolute and are not scaled:
- *  STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS, STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS, STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES (0 turns recovery off).
+ *  STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS, STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS, STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES (0 to 2; 0 turns recovery off).
+ * A limit is rounded first, then must be at least MIN_LIMIT_MS and at most MAX_TIMER_MS, or the call throws with the name.
  */
 export function idleLimits(timeoutMs, shape = {}, env = process.env) {
   const contextTokens = (shape.bodyBytes ?? 0) / 3.5;
@@ -68,16 +93,17 @@ export function idleLimits(timeoutMs, shape = {}, env = process.env) {
   const rank = effortRank(shape);
   const scaledIdle = timeoutMs * Math.min(1.8, 1.4 + 0.1 * rank + 0.1 * contextWeight);
   const scaledFirst = timeoutMs * 0.3 * (1 + 0.15 * rank) * (1 + 0.5 * Math.min(1, contextTokens / 500_000));
-  const streamIdleMs = Math.round(envMs(env, "STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS") ?? scaledIdle);
+  const streamIdleMs = Math.min(MAX_TIMER_MS, Math.round(envMs(env, "STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS") ?? scaledIdle));
   // A first byte never gets more patience than the rest of the stream.
   const firstByteMs = Math.round(envMs(env, "STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS") ?? Math.min(scaledFirst, streamIdleMs));
   const margin = Math.max(50, Math.min(15_000, Math.round(timeoutMs * 0.05)));
   return {
     firstByteMs,
     streamIdleMs,
-    queueIdleMs: Math.max(firstByteMs, streamIdleMs) + margin,
+    queueIdleMs: Math.min(MAX_TIMER_MS, Math.max(firstByteMs, streamIdleMs) + margin),
     statusAfterMs: Math.max(25, Math.min(30_000, Math.round(Math.min(firstByteMs, streamIdleMs) / 3))),
-    maxRecoveries: envCount(env, "STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES") ?? 2,
+    maxRecoveries: envCount(env, "STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES") ?? MAX_REQUEST_SENDS - 1,
+    maxSends: MAX_REQUEST_SENDS,
     recoveryBackoffMs: [Math.min(2_000, Math.round(timeoutMs / 10)), Math.min(8_000, Math.round(timeoutMs / 4))],
   };
 }

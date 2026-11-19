@@ -1137,12 +1137,18 @@ class ClaudeProcess {
     return true;
   }
 
-  async run(input, continuation) {
+  /** Sends of the request to the API made by the last turn (the relay's first try and its quiet retries). */
+  sendsLastTurn = 0;
+
+  async run(input, continuation, turn = {}) {
+    this.sendsLastTurn = 0;
     if (!this.isAlive()) throw new Error("Claude Code process is no longer available");
     input.signal?.throwIfAborted();
 
 
     let sawMessageStop = false;
+    let hung = false;
+    let begun = false;
     let lastEvent = "none yet";
     const deliver = (event) => {
       if (event.type === "message_stop") sawMessageStop = true;
@@ -1161,7 +1167,9 @@ class ClaudeProcess {
       }),
       input.betas,
       () => this.queue.touch(),
+      turn,
     );
+    begun = true;
 
     const abort = () => {
       this.relay.abort();
@@ -1197,7 +1205,20 @@ class ClaudeProcess {
       }
 
       for (;;) {
-        const event = await this.queue.next(input.signal, () => this.relay.limits.queueIdleMs);
+        let event;
+        try {
+          event = await this.queue.next(input.signal, () => this.relay.limits.queueIdleMs);
+        } catch (error) {
+          // The API already sent the whole reply and only Claude Code's final result is missing. Asking again would
+          // bill the same answer twice, so the turn finishes from what the relay captured; the hung process is dropped.
+          if (error instanceof ClaudeWaitLimitError && error.kind === "idle" && !input.signal?.aborted && this.replyCaptured(sawMessageStop)) {
+            hung = true;
+            result = { type: "result", subtype: "success", is_error: false, num_turns: 1, usage: this.relay.capture.message?.usage };
+            reportClaudeCodeDiagnostic("[claude-code] Claude Code went quiet after the API had sent the whole reply; finishing the turn from the received reply instead of asking again.");
+            break;
+          }
+          throw error;
+        }
         if (!event) throw await this.exitError("Claude Code exited before completing its response", input.signal);
         if (event.type === "assistant") {
           const error = nativeErrorText(event);
@@ -1273,6 +1294,7 @@ class ClaudeProcess {
         message,
         result,
         usage,
+        hung: hung || undefined,
         exitCode: this.child.exitCode ?? 0,
         relay: {
           upstreamRequests: Number(this.relay.used),
@@ -1293,12 +1315,20 @@ class ClaudeProcess {
         failure.lastEvent = lastEvent;
         failure.childAlive = this.child.exitCode === null && this.child.signalCode === null;
         failure.bytesReceived = this.relay.bytesReceived;
+        // message_stop was seen: the API finished the reply, so a resend would pay for it twice.
+        if (sawMessageStop) failure.replyComplete = true;
       }
       throw failure;
     } finally {
+      if (begun) this.sendsLastTurn = this.relay.attempts;
       input.signal?.removeEventListener("abort", abort);
       this.relay.finishTurn();
     }
+  }
+
+  /** The relay holds a complete, successful reply (message_stop included). */
+  replyCaptured(sawMessageStop) {
+    return sawMessageStop && this.relay.used && this.relay.status === 200 && this.relay.capture.complete && !!this.relay.capture.message;
   }
 
   /** Synchronous last-resort teardown for the process exit event. */
@@ -1483,6 +1513,8 @@ export async function runClaudeRequest(request) {
   const input = request;
   input.signal?.throwIfAborted();
   const plan = launchPlan(input);
+  // The limits are judged first: a bad STEAK_DSH_CLAUDE_CODE_* value must fail before any process is acquired and left busy.
+  const limits = idleLimits(plan.timeoutMs, {}, plan.env);
   // Acquisition (lock, auth, relay startup) is a non-streaming wait. Its deadline
   // must be disarmed before running the turn: timeoutMs is an HTTP idle budget.
   const deadline = new AbortController();
@@ -1498,13 +1530,15 @@ export async function runClaudeRequest(request) {
   // inert MCP), so nothing it did can have run a tool: the harness runs tools itself after the reply is complete, and
   // every tool result already executed is part of the replayed history. Asking again cannot run anything twice.
   // Partial output already handed to the harness cannot be taken back, so a process recovery is only made while no
-  // content has been delivered (`canRestart`); the relay's own quiet retry before the first byte needs no such check.
-  const limits = idleLimits(plan.timeoutMs, {}, plan.env);
+  // content has been delivered (`canRestart`); with `onEvent` set and no `canRestart`, events are assumed delivered.
+  // The relay's own quiet retry before the first byte needs no such check, but it shares the send budget below.
   let recoveries = 0;
+  // Sends of this one request to the API, across the relay's quiet retries and every recovery: at most limits.maxSends.
+  let sends = 0;
   for (;;) {
     try {
-      const output = await acquired.worker.run(input, acquired.continuation);
-      const stable = acquired.worker.commit(input, output.message);
+      const output = await acquired.worker.run(input, acquired.continuation, { env: plan.env, maxSends: limits.maxSends - sends });
+      const stable = acquired.worker.commit(input, output.message) && !output.hung;
       if (
         stable &&
         acquired.retained &&
@@ -1532,9 +1566,19 @@ export async function runClaudeRequest(request) {
       await discardProcess(acquired);
       if (!(error instanceof ClaudeWaitLimitError) || error.kind !== "idle") throw error;
       error.recoveries = recoveries;
-      const delivered = input.canRestart ? !input.canRestart() : false;
-      // A child that already exited is a crash with its own cause, not a quiet model: asking again would hide it.
-      if (error.childAlive === false || delivered || recoveries >= limits.maxRecoveries) throw idleExhausted(error, recoveries, limits.maxRecoveries, delivered);
+      sends += acquired.worker.sendsLastTurn;
+      // Output already handed over cannot be taken back, and without a canRestart answer it is assumed handed over.
+      const delivered = input.onEvent ? !(input.canRestart?.() ?? false) : false;
+      const refusal =
+        // A child that already exited is a crash with its own cause, not a quiet model: asking again would hide it.
+        error.childAlive === false ? "crash"
+        : limits.maxRecoveries === 0 ? "off"
+        : error.replyComplete ? "complete"
+        : delivered ? "delivered"
+        : recoveries >= limits.maxRecoveries ? "spent"
+        : sends >= limits.maxSends ? "sends"
+        : undefined;
+      if (refusal) throw idleExhausted(error, recoveries, limits, refusal, sends);
       const pause = limits.recoveryBackoffMs[Math.min(recoveries, limits.recoveryBackoffMs.length - 1)];
       recoveries += 1;
       reportClaudeCodeDiagnostic(
@@ -1563,21 +1607,22 @@ function describeStage(stage) {
 }
 
 /** The error the operator sees once automatic recovery is spent: names the cause and says what to do. */
-function idleExhausted(error, recoveries, max, delivered) {
-  const tried = max === 0
-    ? "automatic recovery is off (STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES=0)"
-    : error.childAlive === false
-    ? "no automatic recovery because the process had already exited, which is a crash and not a quiet model"
-    : delivered
-    ? "no automatic recovery because part of the reply had already been handed to the harness"
-    : `${recoveries} automatic ${recoveries === 1 ? "recovery" : "recoveries"} tried and each went quiet again`;
+function idleExhausted(error, recoveries, limits, refusal, sends) {
+  const tried = {
+    off: "automatic recovery is off (STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES=0)",
+    crash: "no automatic recovery because the process had already exited, which is a crash and not a quiet model",
+    complete: "no automatic recovery because the API had already sent the whole reply, and asking again would pay for it twice",
+    delivered: "no automatic recovery because part of the reply had already been handed to the harness and cannot be taken back, and asking again would show it twice",
+    sends: `no further recovery because the request was already sent ${sends} times, the most one request is ever sent (${limits.maxSends})`,
+    spent: `${recoveries} automatic ${recoveries === 1 ? "recovery" : "recoveries"} tried and each went quiet again`,
+  }[refusal];
   const message =
     `Claude Code stream idle limit exceeded (no bytes or events): silent for ${formatSilence(error.silentMs ?? 0)} ${describeStage(error.stage)}; ` +
     `last event: ${error.lastEvent ?? "none"}; the Claude Code process was ${error.childAlive === false ? "already gone" : "alive"}` +
     `${error.bytesReceived === undefined ? "" : error.bytesReceived > 0 ? " and the API had sent data this attempt" : " and the API had sent nothing this attempt"}; ` +
     `${tried}. Send the message again to retry, or raise STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS / STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS (or the plugin's idleLimitMs / firstByteLimitMs) if the model is simply slow.`;
   const named = new ClaudeWaitLimitError(message, { kind: "idle", silentMs: error.silentMs, stage: error.stage });
-  Object.assign(named, { lastEvent: error.lastEvent, childAlive: error.childAlive, bytesReceived: error.bytesReceived, recoveries });
+  Object.assign(named, { lastEvent: error.lastEvent, childAlive: error.childAlive, bytesReceived: error.bytesReceived, recoveries, replyComplete: error.replyComplete });
   return named;
 }
 

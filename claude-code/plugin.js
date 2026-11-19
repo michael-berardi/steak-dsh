@@ -8,6 +8,7 @@
 import { createClaudeCodeAdapter, PROVIDER_ID } from "./adapter.js";
 import { setClaudeCodeDiagnosticReporter } from "./claude-cli.js";
 import { loadHarness } from "./harness.js";
+import { checkedCount, checkedMs } from "./idle-policy.js";
 
 export const name = "steak-claude-code";
 export const inject = ["llm"];
@@ -18,10 +19,11 @@ export function apply(ctx, config = {}) {
   const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : undefined;
   const command = typeof config.command === "string" && config.command ? config.command : undefined;
   // Operator config for the silence limits becomes the same environment names the route reads, unless already set there.
+  // A bad value is a named error here, when the plugin is applied, not a silent default or a failure on the first request.
   const limits = {};
-  if (Number.isFinite(config.idleLimitMs) && config.idleLimitMs > 0) limits.STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS = String(Math.round(config.idleLimitMs));
-  if (Number.isFinite(config.firstByteLimitMs) && config.firstByteLimitMs > 0) limits.STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS = String(Math.round(config.firstByteLimitMs));
-  if (Number.isInteger(config.maxRecoveries) && config.maxRecoveries >= 0 && config.maxRecoveries <= 10) limits.STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES = String(config.maxRecoveries);
+  if (config.idleLimitMs !== undefined) limits.STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS = String(checkedMs("claude-code plugin config idleLimitMs", config.idleLimitMs));
+  if (config.firstByteLimitMs !== undefined) limits.STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS = String(checkedMs("claude-code plugin config firstByteLimitMs", config.firstByteLimitMs));
+  if (config.maxRecoveries !== undefined) limits.STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES = String(checkedCount("claude-code plugin config maxRecoveries", config.maxRecoveries));
   const env = () => ({ ...limits, ...process.env, ...(command ? { STEAK_DSH_CLAUDE_CODE_COMMAND: command } : {}) });
   const note = (message) => process.stderr.write(`${message}\n`);
   setClaudeCodeDiagnosticReporter(note);

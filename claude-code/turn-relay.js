@@ -180,6 +180,7 @@ export class TurnRelay {
   ) {
     this.timeoutMs = timeoutMs;
     this.retry = retry;
+    this.attemptCap = Number.POSITIVE_INFINITY;
     this.env = env;
     this.limits = idleLimits(timeoutMs, {}, env);
 
@@ -210,6 +211,7 @@ export class TurnRelay {
     transformRequest,
     requestBetas = [],
     onActivity,
+    turn = {},
   ) {
     if (this.closed) throw new Error("Claude Code turn relay is closed");
     if (this.active.size > 0) throw new Error("Claude Code turn relay still has an active request");
@@ -223,6 +225,10 @@ export class TurnRelay {
     this.failure = undefined;
     this.failureDetail = undefined;
     this.waitFailure = undefined;
+    // A warm relay keeps the env it was created with; each turn is judged by the env of its own request, and may send
+    // the request only as often as the request-wide budget (shared with the route's recoveries) still allows.
+    if (turn.env) this.env = turn.env;
+    this.attemptCap = turn.maxSends ?? Number.POSITIVE_INFINITY;
     this.limits = idleLimits(this.timeoutMs, {}, this.env);
     this.lastByteAt = Date.now();
     this.bytesReceived = 0;
@@ -364,7 +370,7 @@ export class TurnRelay {
         // A new bounded attempt gets its own idle budget, including after
         // backoff when Claude Code has not emitted any stdout of its own.
         this.onActivity?.();
-        const retryable = attempt < this.retry.attempts && !this.cancelled;
+        const retryable = attempt < Math.min(this.retry.attempts, this.attemptCap) && !this.cancelled;
         this.stage = "upstream-request";
         upstreamRequest = transport.request({
           protocol: this.upstream.protocol,
