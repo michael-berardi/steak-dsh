@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 - 2026-11-19
 
 Runs Gemini models through Google's official Antigravity CLI (`agy`) and removes the direct Antigravity OAuth route.
 
