@@ -2,9 +2,22 @@ import { ClaudeCodeError, CODES } from "./errors.js";
 
 /** A terminal local wait failure, not a suggestion to replay a charged turn. */
 export class ClaudeWaitLimitError extends ClaudeCodeError {
-  constructor(message) {
+  /** "idle": the model or connection went silent mid-turn, which a fresh attempt can fix. Anything else is a local wait. */
+  kind;
+  /** What the silence looked like, filled in where it is known. */
+  silentMs;
+  stage;
+  lastEvent;
+  childAlive;
+  bytesReceived;
+  recoveries;
+
+  constructor(message, details = {}) {
     super(message, CODES.WAIT_LIMIT);
     this.name = "ClaudeWaitLimitError";
+    this.kind = details.kind;
+    this.silentMs = details.silentMs;
+    this.stage = details.stage;
   }
 }
 
@@ -24,6 +37,7 @@ export function waitForOperation(
   label,
   signal,
   onStop,
+  kind,
 ) {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -43,7 +57,7 @@ export function waitForOperation(
       else resolve(value);
     };
     const abort = () => finish(signal?.reason ?? new Error("Claude Code request aborted"), undefined, true);
-    const timer = setTimeout(() => finish(new ClaudeWaitLimitError(`${label} exceeded its wait limit`), undefined, true), timeoutMs);
+    const timer = setTimeout(() => finish(new ClaudeWaitLimitError(`${label} exceeded its wait limit`, { kind, silentMs: timeoutMs, stage: label }), undefined, true), timeoutMs);
     operation.then((value) => finish(undefined, value), (error) => finish(error));
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();

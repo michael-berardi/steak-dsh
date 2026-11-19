@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { spawn, } from "node:child_process";
 import { capCacheBreakpoints, MAX_CACHE_BREAKPOINTS } from "./cache-control.js";
 import { ClaudeWaitLimitError, transportTimeout, waitForOperation } from "./wait.js";
+import { formatSilence, idleLimits } from "./idle-policy.js";
 import { TurnRelay } from "./turn-relay.js";
 import { usageCreditsAllowed, usageCreditsChargeError, } from "./billing.js";
 import { ClaudeCodeError, CODES } from "./errors.js";
@@ -413,8 +414,11 @@ class AsyncQueue {
   ended = false;
   failure;
   activity = new Set();
+  /** Wall time of the last sign of life (native stdout bytes or upstream bytes seen by the relay). */
+  lastTouch = Date.now();
 
   touch() {
+    this.lastTouch = Date.now();
     for (const reset of this.activity) reset();
   }
 
@@ -432,7 +436,7 @@ class AsyncQueue {
     for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true });
   }
 
-  async next(signal, timeoutMs) {
+  async next(signal, limit) {
     signal?.throwIfAborted();
     if (this.values.length) return this.values.shift();
     if (this.ended) {
@@ -461,7 +465,8 @@ class AsyncQueue {
       let timer;
       const reset = () => {
         clearTimeout(timer);
-        timer = setTimeout(() => finish(() => reject(new ClaudeWaitLimitError("Claude Code stream idle limit exceeded (no bytes or events)"))), timeoutMs);
+        const timeoutMs = typeof limit === "function" ? limit() : limit;
+        timer = setTimeout(() => finish(() => reject(new ClaudeWaitLimitError("Claude Code stream idle limit exceeded (no bytes or events)", { kind: "idle", silentMs: timeoutMs, stage: "native stream" }))), timeoutMs);
       };
       this.activity.add(reset);
       reset();
@@ -854,6 +859,12 @@ export function setClaudeCodeDiagnosticReporter(reporter) {
   diagnosticReporter = reporter;
 }
 
+/** One named line for the operator through the sink the plugin supplied, else stderr unless it is a terminal. */
+function reportClaudeCodeDiagnostic(message) {
+  if (diagnosticReporter) diagnosticReporter(message);
+  else if (!process.stderr.isTTY) process.stderr.write(`${message}\n`);
+}
+
 /// Report that markers were dropped, once per process and with a count only.
 function reportCacheCap(dropped) {
   if (dropped <= 0 || cacheCapReported || !diagnosticReporter) return;
@@ -1002,7 +1013,7 @@ class ClaudeProcess {
         writeFile(systemPath, input.systemPrompt, "utf8"),
       ]);
 
-      relay = new TurnRelay(input.upstreamUrl ?? "https://api.anthropic.com", plan.timeoutMs);
+      relay = new TurnRelay(input.upstreamUrl ?? "https://api.anthropic.com", plan.timeoutMs, undefined, undefined, [], undefined, plan.env);
       const env = { ...plan.env, ANTHROPIC_BASE_URL: await relay.start(input.signal) };
       const mcp = {
         mcpServers: {
@@ -1132,10 +1143,13 @@ class ClaudeProcess {
 
 
     let sawMessageStop = false;
+    let lastEvent = "none yet";
     const deliver = (event) => {
       if (event.type === "message_stop") sawMessageStop = true;
+      lastEvent = event.type === "content_block_delta" ? `content_block_delta/${event.delta?.type ?? "unknown"}` : event.type;
       input.onEvent?.(event);
     };
+    this.queue.touch();
     const canonicalInitialUser = input.frames.find((frame) => frame.type === "user")?.message.content ?? [];
     this.relay.beginTurn(
       deliver,
@@ -1183,7 +1197,7 @@ class ClaudeProcess {
       }
 
       for (;;) {
-        const event = await this.queue.next(input.signal, this.timeoutMs);
+        const event = await this.queue.next(input.signal, () => this.relay.limits.queueIdleMs);
         if (!event) throw await this.exitError("Claude Code exited before completing its response", input.signal);
         if (event.type === "assistant") {
           const error = nativeErrorText(event);
@@ -1272,8 +1286,15 @@ class ClaudeProcess {
         rateLimit,
       };
     } catch (error) {
-      if (!input.signal?.aborted && this.relay.waitFailure) throw this.relay.waitFailure;
-      throw error;
+      const failure = !input.signal?.aborted && this.relay.waitFailure ? this.relay.waitFailure : error;
+      if (failure instanceof ClaudeWaitLimitError) {
+        failure.silentMs ??= Date.now() - Math.max(this.queue.lastTouch, this.relay.lastByteAt);
+        failure.stage ??= this.relay.stage;
+        failure.lastEvent = lastEvent;
+        failure.childAlive = this.child.exitCode === null && this.child.signalCode === null;
+        failure.bytesReceived = this.relay.bytesReceived;
+      }
+      throw failure;
     } finally {
       input.signal?.removeEventListener("abort", abort);
       this.relay.finishTurn();
@@ -1473,31 +1494,98 @@ export async function runClaudeRequest(request) {
   } finally {
     clearTimeout(timer);
   }
-  try {
-    const output = await acquired.worker.run(input, acquired.continuation);
-    const stable = acquired.worker.commit(input, output.message);
-    if (
-      stable &&
-      acquired.retained &&
-      acquired.sessionId &&
-      processCache.get(acquired.sessionId) === acquired.worker
-    ) {
-      acquired.worker.busy = false;
-      acquired.worker.armExpiryTimer(() => {
-        void expireProcess(acquired.sessionId, acquired.worker);
-      });
-    } else {
+  // A stalled turn is recovered here, not by the operator. The Claude process is only a transport (no tools, one turn,
+  // inert MCP), so nothing it did can have run a tool: the harness runs tools itself after the reply is complete, and
+  // every tool result already executed is part of the replayed history. Asking again cannot run anything twice.
+  // Partial output already handed to the harness cannot be taken back, so a process recovery is only made while no
+  // content has been delivered (`canRestart`); the relay's own quiet retry before the first byte needs no such check.
+  const limits = idleLimits(plan.timeoutMs, {}, plan.env);
+  let recoveries = 0;
+  for (;;) {
+    try {
+      const output = await acquired.worker.run(input, acquired.continuation);
+      const stable = acquired.worker.commit(input, output.message);
+      if (
+        stable &&
+        acquired.retained &&
+        acquired.sessionId &&
+        processCache.get(acquired.sessionId) === acquired.worker
+      ) {
+        acquired.worker.busy = false;
+        acquired.worker.armExpiryTimer(() => {
+          void expireProcess(acquired.sessionId, acquired.worker);
+        });
+      } else {
+        await discardProcess(acquired);
+      }
+      return output;
+    } catch (error) {
+      // An interrupted turn (Escape) settles at once: the harness must be ready for the next message even
+      // while the old process is still being torn down.
+      if (input.signal?.aborted) {
+        const closing = discardProcess(acquired);
+        pendingClosures.set(closing, acquired.sessionId);
+        void closing.then(() => pendingClosures.delete(closing), () => pendingClosures.delete(closing));
+        throw error;
+      }
+      // Stop only this child (and its relay); the next attempt starts a fresh one for the same session.
       await discardProcess(acquired);
+      if (!(error instanceof ClaudeWaitLimitError) || error.kind !== "idle") throw error;
+      error.recoveries = recoveries;
+      const delivered = input.canRestart ? !input.canRestart() : false;
+      // A child that already exited is a crash with its own cause, not a quiet model: asking again would hide it.
+      if (error.childAlive === false || delivered || recoveries >= limits.maxRecoveries) throw idleExhausted(error, recoveries, limits.maxRecoveries, delivered);
+      const pause = limits.recoveryBackoffMs[Math.min(recoveries, limits.recoveryBackoffMs.length - 1)];
+      recoveries += 1;
+      reportClaudeCodeDiagnostic(
+        `[claude-code] no sign of life for ${formatSilence(error.silentMs ?? 0)} (${describeStage(error.stage)}); stopped that Claude Code process and asking again ` +
+          `(recovery ${recoveries} of ${limits.maxRecoveries}). Finished tool calls are not repeated.`,
+      );
+      await sleepUnlessAborted(pause, input.signal);
+      const retry = new AbortController();
+      const retryTimer = setTimeout(() => retry.abort(new ClaudeWaitLimitError("Claude Code worker acquisition exceeded its wait limit")), plan.timeoutMs);
+      try {
+        acquired = await acquireProcess({ ...input, signal: input.signal ? AbortSignal.any([input.signal, retry.signal]) : retry.signal }, plan);
+      } finally {
+        clearTimeout(retryTimer);
+      }
     }
-    return output;
-  } catch (error) {
-    // An interrupted turn (Escape) settles at once: the harness must be ready for the next message even
-    // while the old process is still being torn down.
-    if (input.signal?.aborted) {
-      const closing = discardProcess(acquired);
-      pendingClosures.set(closing, acquired.sessionId);
-      void closing.then(() => pendingClosures.delete(closing), () => pendingClosures.delete(closing));
-    } else await discardProcess(acquired);
-    throw error;
   }
+}
+
+function describeStage(stage) {
+  if (!stage) return "waiting on the model";
+  if (/response headers/.test(stage)) return "waiting for the API to answer";
+  if (/first byte/.test(stage)) return "waiting for the first byte of the reply";
+  if (/stream idle|streaming/.test(stage)) return "partway through the reply";
+  if (/native/.test(stage)) return "waiting on Claude Code output";
+  return stage;
+}
+
+/** The error the operator sees once automatic recovery is spent: names the cause and says what to do. */
+function idleExhausted(error, recoveries, max, delivered) {
+  const tried = max === 0
+    ? "automatic recovery is off (STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES=0)"
+    : error.childAlive === false
+    ? "no automatic recovery because the process had already exited, which is a crash and not a quiet model"
+    : delivered
+    ? "no automatic recovery because part of the reply had already been handed to the harness"
+    : `${recoveries} automatic ${recoveries === 1 ? "recovery" : "recoveries"} tried and each went quiet again`;
+  const message =
+    `Claude Code stream idle limit exceeded (no bytes or events): silent for ${formatSilence(error.silentMs ?? 0)} ${describeStage(error.stage)}; ` +
+    `last event: ${error.lastEvent ?? "none"}; the Claude Code process was ${error.childAlive === false ? "already gone" : "alive"}` +
+    `${error.bytesReceived === undefined ? "" : error.bytesReceived > 0 ? " and the API had sent data this attempt" : " and the API had sent nothing this attempt"}; ` +
+    `${tried}. Send the message again to retry, or raise STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS / STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS (or the plugin's idleLimitMs / firstByteLimitMs) if the model is simply slow.`;
+  const named = new ClaudeWaitLimitError(message, { kind: "idle", silentMs: error.silentMs, stage: error.stage });
+  Object.assign(named, { lastEvent: error.lastEvent, childAlive: error.childAlive, bytesReceived: error.bytesReceived, recoveries });
+  return named;
+}
+
+function sleepUnlessAborted(ms, signal) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(timer); reject(signal?.reason ?? new Error("Claude Code request aborted")); };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

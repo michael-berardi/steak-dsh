@@ -17,7 +17,12 @@ const harness = await loadHarness();
 export function apply(ctx, config = {}) {
   const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : undefined;
   const command = typeof config.command === "string" && config.command ? config.command : undefined;
-  const env = () => (command ? { ...process.env, STEAK_DSH_CLAUDE_CODE_COMMAND: command } : process.env);
+  // Operator config for the silence limits becomes the same environment names the route reads, unless already set there.
+  const limits = {};
+  if (Number.isFinite(config.idleLimitMs) && config.idleLimitMs > 0) limits.STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS = String(Math.round(config.idleLimitMs));
+  if (Number.isFinite(config.firstByteLimitMs) && config.firstByteLimitMs > 0) limits.STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS = String(Math.round(config.firstByteLimitMs));
+  if (Number.isInteger(config.maxRecoveries) && config.maxRecoveries >= 0 && config.maxRecoveries <= 10) limits.STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES = String(config.maxRecoveries);
+  const env = () => ({ ...limits, ...process.env, ...(command ? { STEAK_DSH_CLAUDE_CODE_COMMAND: command } : {}) });
   const note = (message) => process.stderr.write(`${message}\n`);
   setClaudeCodeDiagnosticReporter(note);
   const adapter = createClaudeCodeAdapter(harness, { env, timeoutMs, report: note });

@@ -123,6 +123,8 @@ export function createClaudeCodeAdapter(harness, { env = () => process.env, time
           initialSystemMessages: getInitialSystemMessages(options.messages),
           sessionId: options.sessionId === undefined ? undefined : String(options.sessionId),
           onEvent: (event) => queue.push(translator.event(event)),
+          // Once content has reached the harness a process recovery would double it, so only a quiet attempt restarts.
+          canRestart: () => !translator.sawContentEvent,
         };
       } catch (error) {
         throw fail(error);

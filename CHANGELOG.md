@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A quiet or stalled Claude Code turn no longer ends the run.** The route had one 180 s silence limit for every stage. Now: a connection that never answers is retried quietly at the first-byte limit (about 54 s at the default budget); once the reply is streaming the idle limit is 1.4 to 1.8 times the budget, scaled up for high reasoning effort and large requests; and a stalled process is stopped and the turn asked again from the same history, at most twice, while nothing of the reply has reached the harness (what was already handed over cannot be taken back, so that case ends with a named error). Claude Code only generates, so asking again repeats no tool call. The final error names the silence, the last event, whether the process was alive and how many recoveries were tried. Set `idleLimitMs`, `firstByteLimitMs` and `maxRecoveries` in the plugin config, or `STEAK_DSH_CLAUDE_CODE_IDLE_LIMIT_MS`, `STEAK_DSH_CLAUDE_CODE_FIRST_BYTE_LIMIT_MS` and `STEAK_DSH_CLAUDE_CODE_MAX_RECOVERIES`.
+
 ## 0.10.3 - 2026-11-15
 
 - **README:** 597 lines to 153. It leads with what the bundle adds and the one-line install; the reference material moved to `docs/`, which now ships in the package and the release archive.
