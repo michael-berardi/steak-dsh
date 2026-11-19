@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0 - 2026-11-19
+
+Adds a `local` route: run on a local model managed by Steak Pi, with or without a LoRA adapter.
+
+- **Local models.** `--model local/<id>` runs on a model added with Steak Pi's local manager: the launcher runs `steak-pi local ensure <id>`, declares the returned endpoint (context window from the profile's `ctx` unless `--context-window` is given) and always runs `steak-pi local release <id>` afterwards. A refusal or hold from the tool is printed as-is (exit 2, dsh not started). `models` lists `local/<id>` per profile file; `doctor` reports `steak-pi local`. The ensure answer must name the requested model and a server on this machine (127.0.0.1, localhost or [::1]), or the run is refused and the lease released.
+- **Verified end to end:** two back-to-back `steak-dsh run --model local/<id>` tasks on a small model with a harness LoRA adapter, the second right after the server's idle stop, both completed with a tool call.
+- **Test fix:** the "Escape during a quiet stretch" recovery test now times Escape from the request's arrival, so a slow CLI start under a loaded suite no longer fails it.
+
 ## 0.11.1 - 2026-11-19
 
 Hardens the optional Google Antigravity route after an independent review. Nothing changes while it is off.

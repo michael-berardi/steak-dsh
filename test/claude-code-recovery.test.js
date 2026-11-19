@@ -373,14 +373,23 @@ test("Escape during a quiet stretch is an abort, not a stall, and nothing is rec
   sse(response, START, { type: "ping" });
 }, async (r) => {
   const controller = new AbortController();
-  later(500, () => controller.abort(new Error("operator pressed Escape")));
-  const started = Date.now();
+  // Escape 500 ms into the quiet stretch, counted from the request's arrival: under a loaded full suite the CLI can take
+  // longer than 500 ms to start, and an abort before the request would test nothing (attempts would be 0).
+  let quietFrom;
+  const poll = setInterval(() => {
+    if (r.attempts() < 1) return;
+    clearInterval(poll);
+    quietFrom = Date.now();
+    later(500, () => controller.abort(new Error("operator pressed Escape")));
+  }, 10);
+  timers.add(poll);
   await assert.rejects(r.run({ canRestart: () => true, signal: controller.signal }), (error) => {
     assert.match(error.message, /operator pressed Escape/);
     assert.doesNotMatch(error.message, /stream idle limit exceeded/);
     return true;
   });
-  assert.ok(Date.now() - started < 1_300, "ended at Escape, before the 1.4 s stall limit");
+  clearInterval(poll);
+  assert.ok(quietFrom !== undefined && Date.now() - quietFrom < 1_300, "ended at Escape, before the 1.4 s stall limit");
   assert.equal(r.attempts(), 1);
   assert.equal(r.pids().length, 1);
 }));

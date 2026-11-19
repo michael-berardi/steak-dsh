@@ -49,13 +49,13 @@ To remove it, delete the install directory and its command shims, then run
 Already have Node and a supported dsh? Install only the launcher:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.11.1
+npm i -g github:michael-berardi/steak-dsh#v0.12.0
 ```
 
 Or add only the plugin to a profile:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.11.1
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.12.0
 ```
 
 ### From source
@@ -134,6 +134,16 @@ be reached; it does not call the sign-in invalid. One stream line over 16 MiB, a
 a model list over 8 MiB end the request with a `protocol` error. `antigravity status` reads the saved file only: it
 says "not expired locally" and does not call Google or rewrite the file.
 With the route off the cost is one failed file read. See the 0.11.0 and 0.11.1 changelog entries for what was verified.
+
+## Local models
+
+`steak-dsh run|chat|tui --model local/<id>` runs on a local model added with Steak Pi's local manager (`steak-pi local add ...`). It needs that manager (`steak-pi` on PATH, or `STEAK_DSH_STEAK_PI`); without it, or to use any OpenAI-compatible server yourself, pass `--model <provider>/<id> --base-url ... --api ... --key-env ...`.
+
+```
+steak-dsh run --model local/my-model "your task"
+```
+
+The launcher runs `steak-pi local ensure <id>` first (it starts the server on demand and takes a lease), declares the returned endpoint as an `openai-completions` route named `local` with a placeholder key it sets itself (no key to export), and runs `steak-pi local release <id>` when the run ends, however it ends. The context window comes from the profile's `ctx` (`$PI_CODING_AGENT_DIR` or `~/.pi/agent`, `local/profiles/<id>.json`) unless `--context-window` is given. Holds and refusals pass through unchanged: the tool's message is printed and the launcher exits 2 without starting dsh. A model added with a LoRA adapter in `steak-pi local` works the same way. `--base-url`, `--api` and `--key-env` are refused with `local/...`; `--stock` works (the route is only the endpoint declaration). `steak-dsh models` lists `local/<id>` for each profile file; `steak-dsh doctor` reports whether `steak-pi` was found.
 
 ## Checks and profiles
 

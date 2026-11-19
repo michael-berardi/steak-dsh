@@ -47,7 +47,7 @@ test("models: --json carries the list and each route's count or error; --provide
 
 test("models: the two built-in sources are the bundle's two login-backed routes", () => {
   // A private DSH_HOME: the check must not depend on the operator's own configuration files.
-  assert.deepEqual(Object.keys(defaultSources({ DSH_HOME: "/nonexistent/steak-dsh-test-home" })), ["claude-code", "openai-codex"]);
+  assert.deepEqual(Object.keys(defaultSources({ DSH_HOME: "/nonexistent/steak-dsh-test-home", PI_CODING_AGENT_DIR: "/nonexistent/steak-dsh-test-pi" })), ["claude-code", "openai-codex"]);
 });
 
 test("models: on a machine with neither login the command names both causes and prints no model", () => {

@@ -96,9 +96,9 @@ test("lazy: the plugin registers an adapter once the config turns it on", async 
 
 test("models command: the route is listed only when turned on; --stock and --base-url are refused for it", () => {
   const { home } = scratchEnv();
-  assert.deepEqual(Object.keys(defaultSources({ DSH_HOME: home })), ["claude-code", "openai-codex"]);
+  assert.deepEqual(Object.keys(defaultSources({ DSH_HOME: home, PI_CODING_AGENT_DIR: "/nonexistent/steak-dsh-test-pi" })), ["claude-code", "openai-codex"]);
   writeConfigFile(join(home, "steak-dsh-antigravity.json"), { enabled: true });
-  assert.deepEqual(Object.keys(defaultSources({ DSH_HOME: home })), ["claude-code", "openai-codex", "antigravity"]);
+  assert.deepEqual(Object.keys(defaultSources({ DSH_HOME: home, PI_CODING_AGENT_DIR: "/nonexistent/steak-dsh-test-pi" })), ["claude-code", "openai-codex", "antigravity"]);
   assert.throws(() => parseOptions(["--stock", "--model", "antigravity/x", "task"], { command: "run" }), /antigravity route is part of the bundle/);
   assert.throws(() => parseOptions(["--model", "antigravity/x", "--base-url", "http://x", "--api", "openai-completions", "--key-env", "K", "task"], { command: "run" }), /cannot name the antigravity route/);
 });
