@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.0 - 2026-11-20
+
+- **Per-model guidance (`steak-model-guidance` row).** `modelGuidance` in `$DSH_HOME/steak-dsh.json` (or the row's `rules` config) is a list of `{ "match", "text" }` rules; the plugin adds one system-prompt section whose text is the lines for the step's own provider/model, so a fallback or model switch gets that model's lines. The bundle ships no rule and names no model. A bad rule is named on stderr and skipped; `STEAK_DSH_MODEL_GUIDANCE=off` or `disabled: true` on the row leaves it out. Tests: `test/model-guidance.test.js`.
+
 ## 0.14.0 - 2026-11-20
 
 The `agy/<id>` route can run Google's Antigravity CLI as an ACP session in which Steak DSH's own tools are the only tools.

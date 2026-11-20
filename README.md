@@ -49,13 +49,13 @@ To remove it, delete the install directory and its command shims, then run
 Already have Node and a supported dsh? Install only the launcher:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.13.0
+npm i -g github:michael-berardi/steak-dsh#v0.15.0
 ```
 
 Or add only the plugin to a profile:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.13.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.15.0
 ```
 
 ### From source
@@ -195,6 +195,8 @@ verification pauses until the next request. Persistent project settings belong i
 ```json
 { "projects": { "/abs/path/to/project": { "verify": { "command": "npm test", "failLimit": 2, "timeoutMs": 90000 } } } }
 ```
+
+The same file can hold per-model guidance: `{ "modelGuidance": [{ "match": "^provider-a/", "text": "..." }] }` adds each line to the system prompt only on steps whose provider/model matches (case-insensitive). The bundle ships no rule.
 
 A project's `.steak-dsh/config.json` is read only if the project is listed under
 `"trusted"` in that user configuration.

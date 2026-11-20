@@ -27,6 +27,10 @@
     - id: steak-rules
       name: ./plugins/rules.js
       config: {}
+    # Short lines for the models the operator names in $DSH_HOME/steak-dsh.json "modelGuidance" (none by default).
+    - id: steak-model-guidance
+      name: ./plugins/model-guidance.js
+      config: {}
     # One small tool that switches the heavier tools (subagents, follow-up, working directory) on when the model asks.
     - id: steak-more-tools
       name: ./plugins/more-tools.js
