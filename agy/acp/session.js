@@ -212,14 +212,16 @@ export class AcpSession {
       let granted = false;
       try {
         const decision = await this.approval?.({
-          title: String(call.title ?? "ag y tool"),
+          title: String(call.title ?? "agy tool"),
           name: String(call.name ?? ""),
           rawInput: call.rawInput,
           options,
         });
         granted = decision === true || (typeof decision === "string" && String(allow?.optionId) === decision);
       } catch { granted = false; }
-      return { outcome: { outcome: "selected", optionId: granted ? allow?.optionId ?? "allow-once" : reject?.optionId ?? "reject-once" } };
+      // Only ever select an option agy offered; with no matching option, answer "cancelled" (ACP's refusal without a choice).
+      const chosen = granted ? allow : reject;
+      return chosen ? { outcome: { outcome: "selected", optionId: chosen.optionId } } : { outcome: { outcome: "cancelled" } };
     }
     // Capabilities we never advertised: refuse instead of granting a side channel around the harness.
     throw { code: -32601, message: `Steak DSH does not grant ACP ${message.method}` };
@@ -328,6 +330,9 @@ export class AcpSession {
 
   async close() {
     if (this.closed) return;
+    // A prompt still in flight is cancelled at the agent before the connection goes: an abort that closes the session in
+    // the same tick as its abort listener must never skip session/cancel (seen under full-suite load).
+    if (this.promptPromise && this.sessionId) { try { this.rpc?.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* connection already gone */ } }
     this.closed = true;
     const parked = new AgyError("ACP session closed while a tool call was pending", CODES.CANCELLED);
     const hadParked = this.parked.size > 0;

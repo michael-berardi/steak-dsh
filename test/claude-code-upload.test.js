@@ -1,3 +1,4 @@
+// test-timing: serial (asserts wall-clock budgets; see scripts/run-tests.mjs)
 // A slow upload is not a silent model: the first-byte limit starts when the body is handed over and never runs while it moves.
 import test from "node:test";
 import assert from "node:assert/strict";

@@ -1,3 +1,4 @@
+// test-timing: serial (asserts wall-clock budgets; see scripts/run-tests.mjs)
 // A quiet or stalled Claude Code turn: the silence limits, the quiet retry before the first byte, and the bounded process recovery.
 import test from "node:test";
 import assert from "node:assert/strict";
