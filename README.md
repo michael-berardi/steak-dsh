@@ -111,13 +111,46 @@ sign-in; Steak DSH ships no model, no OAuth client and no credentials.
 3. `steak-dsh models --provider agy` prints `agy/<id>` for what `agy models` lists. Your plan decides the list.
 4. `steak-dsh run --model agy/<model-id> "your task"` (use an id that `steak-dsh models --provider agy` printed; `chat` and `tui` work the same).
 
+**Two transports, selected by `STEAK_DSH_AGY_TRANSPORT=acp|headless|auto` (default `auto`).** `auto` uses ACP when
+`agy acp --help` succeeds, and falls back to headless with a logged reason; `acp` fails with a named error instead of
+falling back (`STEAK_PI_AGY_TRANSPORT` from the Steak Pi sibling is also honoured). Nothing is started until a model is listed or a request is made.
+
+### ACP mode (default when available)
+
+One long-lived `agy acp` session serves a whole DSH session: Google's documented ACP server
+(<https://antigravity.google/docs/cli/acp/>), JSON-RPC over stdin/stdout. Steak DSH starts it with
+`--agent steak-dsh-bridge --process-per-session --disable-telemetry --log-file <private path> --add-dir <cwd>`.
+The minimal bridge agent has `tools: []` and `excludeDefaultComponents: true`, so agy has no native shell, file,
+browser or subagent tools. `--process-per-session` is required by Google when the client configures an HTTP MCP
+server. We do **not** pass `--dangerously-skip-permissions`; any permission request agy still makes is denied unless
+the host supplies an approval decision. agy uses its own cached sign-in: no credential file or token is read, copied
+or passed by this route.
+
+**Tools run through DSH, never through the adapter.** A per-session loopback MCP server listens on 127.0.0.1 only, on
+an OS-chosen port, with a random bearer token compared in constant time, and closes with the session. Its
+`tools/list` is DSH's own tool declarations from the request. When agy calls `tools/call`, the adapter parks that HTTP
+request (sending SSE/keep-alive whitespace while it waits), ends the current DSH model turn with a normal harness
+tool-call block (`id`, `name`, `arguments`), and DSH validates, approves and executes the tool through its usual
+permission and owned-path pipeline. On the next request the adapter matches the tool result back to the parked call,
+answers MCP, and agy continues the *same* ACP prompt turn. Parallel calls are grouped into one harness turn; abort
+answers parked calls with an error and cancels the ACP turn; a missing result is a named protocol error; resetting a
+session closes its ACP child, listener and token. The context window comes from the server's `usage_update.size`, and
+effort levels from its session options (Low/Medium/High/Extra/Max); cumulative input/cacheRead counts are scaled to
+single-call occupancy so the harness does not compact early.
+
+ACP failures are named, never silently swapped: `AGY_MISSING`, `AGY_NOT_SIGNED_IN` (ACP code `-32000`
+"Authentication required"), `AGY_MODEL_UNAVAILABLE`, `AGY_ACP_PROTOCOL`, `AGY_ACP_BRIDGE`, `AGY_ACP_UNSUPPORTED`,
+`AGY_TIMEOUT` and `AGY_CANCELLED`.
+
+### Headless mode (fallback)
+
 **Tool calls run inside agy, under agy's permission rules.** agy keeps its own agent loop, its own tools (shell, file
 edits, MCP) and its own `settings.json` permission rules; the dsh harness does not run them. agy runs its own tools under
 agy's permission rules, outside Steak DSH's approvals. Steak DSH never passes --dangerously-skip-permissions, so agy's
 default permissions apply: per Google's docs, actions that need approval are not approved in headless mode (the run
 continues without them); allow tools ahead of time with permissions.allow in ~/.gemini/antigravity-cli/settings.json
 (<https://antigravity.google/docs/cli/permissions>). Any notice agy prints about this goes to stderr.
-This route was tested only with a fake agy and a signed-out agy, never a signed-in one.
+Both transports were tested only with fake ACP/headless agy fixtures and a signed-out agy, never a signed-in one.
 Each agy tool step appears in the reply as a progress line such as `[agy tool: run_command echo hi]`, not as a
 harness tool call, so the harness's own tools, `--permission` presets, `--owned-path` and verify-after-edit do not
 govern what agy does. agy runs in the directory you launched from, with that directory added to its workspace.
