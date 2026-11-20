@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 - 2026-11-20
+
+The `agy/<id>` route can run Google's Antigravity CLI as an ACP session in which Steak DSH's own tools are the only tools.
 
 - **ACP transport for the `agy/<id>` route.** `STEAK_DSH_AGY_TRANSPORT=acp|headless|auto` (default `auto`) selects a long-lived `agy acp` session when `agy acp --help` works; `headless` stays the fallback and an explicit `acp` failure is named, never silently swapped. ACP runs with `--process-per-session --disable-telemetry --log-file <private>` and a minimal agent (`tools: []`, `excludeDefaultComponents: true`), so agy has no native tools. `--dangerously-skip-permissions` is not passed; no credential file or token is read or copied.
 - **DSH's tools are the only tools.** A per-session loopback MCP bridge (127.0.0.1, ephemeral port, random bearer token in constant-time comparison) advertises the request's harness tool declarations. Each `tools/call` is parked, returned to DSH as a normal harness tool call, and answered only after DSH's own approval/owned-path pipeline produces the result; agy then continues the same ACP prompt. Parallel calls, keep-alive while parked, abort, missing results and session reset are handled. `usage_update.size` supplies the real context window, session options supply the real effort levels, and cumulative usage is normalised.
+- **Review fixes:** a permission answer only ever selects an option agy offered (else `cancelled`), and closing a session cancels a prompt still in flight.
+- **Test runner:** `npm test` runs files that assert wall-clock budgets (`// test-timing: serial`) alone after the rest, so load from other files cannot fail them.
 - **Tests:** a fake ACP server fixture covers init, model/effort options, streamed text, the MCP tools/call round trip through the harness loop, parallel calls, `-32000` auth, cancel, abort while parked, bridge auth, and reset. Verified only against fixtures, never a signed-in agy.
 
 ## 0.13.0 - 2026-11-19

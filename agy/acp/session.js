@@ -5,6 +5,9 @@
  * agent); agy's sign-in and settings are its own.
  */
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+const VERSION = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
 import { AgyError, CODES, cleanAgyText } from "../errors.js";
 import { killGroup, resolveAgy, stopGroup } from "../cli.js";
 import { JsonRpc } from "./jsonrpc.js";
@@ -111,7 +114,7 @@ export class AcpSession {
       const init = await this.rpc.request("initialize", {
         protocolVersion: 1,
         clientCapabilities: {}, // no fs, no terminal: agy cannot reach the host except through the bridge
-        clientInfo: { name: "steak-dsh", title: "Steak DSH", version: "0.13.0" },
+        clientInfo: { name: "steak-dsh", title: "Steak DSH", version: VERSION },
       }, { signal });
       if (!init || Number(init.protocolVersion) !== 1) {
         throw new AgyError(`agy ACP negotiated protocol version ${init?.protocolVersion ?? "none"}, expected 1`, CODES.ACP_PROTOCOL);
