@@ -38,6 +38,19 @@ test("local tuning row: uio version, and per profile a tune record or none", () 
   assert.equal(tuningLine(env), `local tuning: uio 1.2.3 at ${s.uio}; a: tuned 2026-11-21 (24.5 tok/s decode); b: no uio tune record`);
 });
 
+test("local tuning row: omits the tok/s when decodeTokS is absent, null or not a number", () => {
+  const s = scratch();
+  const work = join(s.dir, "work");
+  mkdirSync(work);
+  writeFileSync(join(work, "best-config.json"), "{}");
+  const at = "2026-11-21T10:00:00.000Z";
+  writeFileSync(join(s.profiles, "a.json"), JSON.stringify({ uioLastTune: { at, workdir: work } }));
+  writeFileSync(join(s.profiles, "b.json"), JSON.stringify({ uioLastTune: { at, workdir: work, decodeTokS: null } }));
+  writeFileSync(join(s.profiles, "c.json"), JSON.stringify({ uioLastTune: { at, workdir: work, decodeTokS: "fast" } }));
+  const env = { ...s.env, STEAK_PI_UIO: s.uio };
+  assert.equal(tuningLine(env), `local tuning: uio 1.2.3 at ${s.uio}; a: tuned 2026-11-21; b: tuned 2026-11-21; c: tuned 2026-11-21`);
+});
+
 test("local tuning row: finds uio on PATH, and says when the recorded workdir is gone", () => {
   const s = scratch();
   writeFileSync(join(s.profiles, "a.json"), JSON.stringify({ uioLastTune: { at: "2026-11-21T10:00:00.000Z", workdir: join(s.dir, "gone"), decodeTokS: 20 } }));
