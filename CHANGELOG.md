@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.0 - 2026-11-22
+
+- **`steak-dsh doctor` shows local tuning.** A `local tuning` row says whether the optional `uio` tuner is installed (its version) and, for each
+  local model profile, whether `steak-pi local tune --apply` has tuned it (date and measured decode tok/s), `record missing` when the recorded
+  run folder is gone, or `no uio tune record`. A tuned profile is used unchanged: `--model local/<id>` reads the same profile Steak Pi wrote.
+- Tests: `test/local-tuning.test.js`.
+
 ## 0.15.0 - 2026-11-20
 
 - **Per-model guidance (`steak-model-guidance` row).** `modelGuidance` in `$DSH_HOME/steak-dsh.json` (or the row's `rules` config) is a list of `{ "match", "text" }` rules; the plugin adds one system-prompt section whose text is the lines for the step's own provider/model, so a fallback or model switch gets that model's lines. The bundle ships no rule and names no model. A bad rule is named on stderr and skipped; `STEAK_DSH_MODEL_GUIDANCE=off` or `disabled: true` on the row leaves it out. Tests: `test/model-guidance.test.js`.
