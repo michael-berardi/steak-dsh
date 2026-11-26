@@ -49,13 +49,13 @@ To remove it, delete the install directory and its command shims, then run
 Already have Node and a supported dsh? Install only the launcher:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.17.1
+npm i -g github:michael-berardi/steak-dsh#v0.18.0
 ```
 
 Or add only the plugin to a profile:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.17.1
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.18.0
 ```
 
 ### From source

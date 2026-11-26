@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.17.1 - 2026-11-26
+## 0.18.0 - 2026-11-26
 
 Privacy hardening: no telemetry from any process this tool starts.
 
