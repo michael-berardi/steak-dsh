@@ -210,10 +210,12 @@ for the trust boundary. `steak-dsh --help` is the flag reference.
 
 ## Privacy
 
-No telemetry, analytics, crash reports or automatic update checks; installers disable npm's update notifier.
-Prompts go only to the model provider you choose; login keys stay with their CLIs.
-Local logs, caches and temp files have bounded lifetimes; there are no update prompts.
-See [PRIVACY.md](PRIVACY.md) for egress, storage, retention and deletion details.
+No telemetry, analytics or crash reports.
+Prompts, files and login refreshes go only to the model provider you choose; CLI logins stay in those CLIs' files.
+Installers download from GitHub and, only when needed, nodejs.org and npm; nothing else calls out.
+No update check runs, so there is nothing to opt out of; re-run an installer to update.
+Exit logs (newest 20), the compile cache (30 days) and per-run temp files are pruned automatically.
+Delete `~/.dsh/steak-dsh/logs` and `~/.cache/steak-dsh` to remove them; [PRIVACY.md](PRIVACY.md) lists every path.
 
 ## Recorded benchmarks
 
