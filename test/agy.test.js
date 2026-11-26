@@ -23,6 +23,16 @@ const readAll = (log) => (existsSync(log) ? readFileSync(log, "utf8").split("\n"
 const readLog = (log) => readAll(log).filter((l) => l.argv); // one entry per launch
 const prompts = (log) => readAll(log).filter((l) => l.stdin).map((l) => l.stdin);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+/**
+ * agy's own child is awaited (its exit event) before the route returns, but a grandchild in agy's group is not ours: the
+ * route's group SIGKILL lands, the orphan is reparented and reaped by the OS on its own schedule, and until then kill(pid, 0)
+ * still succeeds (under 2x CPU oversubscription that window was seen right after the route returned). Poll a bounded 2 s,
+ * as the grandchild checks below always have; a grandchild that was never killed runs on and still fails the assertion.
+ */
+const aliveAfterGroupKill = async (pid) => {
+  for (let i = 0; i < 40 && alive(pid); i += 1) await new Promise((r) => setTimeout(r, 50));
+  return alive(pid);
+};
 const user = (text) => ({ role: "user", id: "u", source: { kind: "user" }, content: [{ type: "text", text }] });
 const assistant = (text, replayState) => ({ role: "assistant", id: "a", source: { kind: "model", ...(replayState ? { replayState } : {}) }, content: [{ type: "text", text }] });
 
@@ -249,7 +259,7 @@ test("a run that exceeds the time limit is stopped and named", async (t) => {
   assert.equal(error.code, "AGY_TIMEOUT");
   const [launch] = readLog(log);
   assert.equal(alive(launch.pid), false);
-  assert.equal(alive(launch.child), false);
+  assert.equal(await aliveAfterGroupKill(launch.child), false);
 });
 
 test("prompt on stdin: text that looks like a flag, and a 300 KB non-ASCII prompt, arrive intact and never touch argv", async (t) => {
@@ -316,7 +326,7 @@ test("abort: SIGINT to the process group ends agy and its children; nothing is l
   assert.equal(seen.some((c) => c.type === "text-delta"), true);
   const [launch] = readLog(log);
   assert.equal(alive(launch.pid), false, "agy is gone");
-  assert.equal(alive(launch.child), false, "so is its child");
+  assert.equal(await aliveAfterGroupKill(launch.child), false, "so is its child");
 });
 
 test("abort: an agy that ignores SIGINT and SIGTERM is killed within the bounded steps", { timeout: 30_000 }, async (t) => {
@@ -332,7 +342,7 @@ test("abort: an agy that ignores SIGINT and SIGTERM is killed within the bounded
   assert.ok(Date.now() - started < 12_000, "bounded");
   const [launch] = readLog(log);
   assert.equal(alive(launch.pid), false);
-  assert.equal(alive(launch.child), false);
+  assert.equal(await aliveAfterGroupKill(launch.child), false);
 });
 
 test("abort: a consumer that stops reading early leaves no live agy", async (t) => {
@@ -342,7 +352,7 @@ test("abort: a consumer that stops reading early leaves no live agy", async (t) 
   }
   const [launch] = readLog(log);
   assert.equal(alive(launch.pid), false);
-  assert.equal(alive(launch.child), false);
+  assert.equal(await aliveAfterGroupKill(launch.child), false);
 });
 
 // ---- the launcher ----
