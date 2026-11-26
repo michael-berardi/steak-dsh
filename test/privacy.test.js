@@ -1,11 +1,11 @@
 /** Privacy guards: no analytics SDK or endpoint in shipped code, and every launch path we control is quiet. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launchEnv, quietEnv } from "../lib/dsh.js";
+import { compileCacheDir, launchEnv, pruneCompileCache, quietEnv } from "../lib/dsh.js";
 import { Controller, EXIT_LOG_LIMIT, pruneExitLogs } from "../lib/tui/session.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -69,6 +69,48 @@ test("crash logs are kept private and bounded", () => {
     assert.ok(names.slice(0, 5).every((name) => !left.includes(name)), "the oldest logs go");
     assert.ok(left.includes("unrelated.txt"), "other files are untouched");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the compile cache drops stale and excess entries without following symlinks", () => {
+  const root = mkdtempSync(join(tmpdir(), "steak-dsh-cache-prune-"));
+  try {
+    const cache = join(root, "cache");
+    const version = join(cache, "v22-test");
+    mkdirSync(version, { recursive: true });
+    const names = ["old", "fresh-a", "fresh-b", "fresh-c"];
+    const paths = names.map((name) => join(version, name));
+    for (const path of paths) writeFileSync(path, "compiled module");
+    const now = Date.now();
+    const stamp = (path, ms) => { const date = new Date(ms); utimesSync(path, date, date); };
+    stamp(paths[0], now - 31 * 24 * 60 * 60 * 1000);
+    names.slice(1).forEach((_, i) => stamp(paths[i + 1], now - 60_000 + i * 1000));
+    const outside = join(root, "outside");
+    writeFileSync(outside, "keep");
+    if (process.platform !== "win32") symlinkSync(outside, join(version, "link"));
+
+    pruneCompileCache(cache, { now: () => now, maxFiles: 2 });
+    const left = readdirSync(version).sort();
+    assert.equal(left.includes("old"), false, "a file older than the retention window goes");
+    assert.equal(left.includes("fresh-a"), false, "the oldest excess fresh file goes");
+    assert.ok(left.includes("fresh-b") && left.includes("fresh-c"), "the newest files stay");
+    assert.equal(readFileSync(outside, "utf8"), "keep", "the symlink target was never touched");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("launching prunes the private compile cache automatically", () => {
+  const home = mkdtempSync(join(tmpdir(), "steak-dsh-cache-launch-"));
+  try {
+    const cache = join(home, ".cache", "steak-dsh", "compile-cache");
+    const version = join(cache, "v22-test");
+    mkdirSync(version, { recursive: true });
+    const stale = join(version, "stale");
+    writeFileSync(stale, "compiled module");
+    const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    utimesSync(stale, old, old);
+    assert.equal(compileCacheDir({ HOME: home }), cache);
+    assert.equal(existsSync(stale), false, "the launcher removed the stale entry");
+    assert.equal(existsSync(cache), true, "the live cache folder stays usable");
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 test("a crash log tightens a log folder that already existed with loose permissions", () => {

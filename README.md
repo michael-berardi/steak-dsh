@@ -49,13 +49,13 @@ To remove it, delete the install directory and its command shims, then run
 Already have Node and a supported dsh? Install only the launcher:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.18.0
+npm i -g github:michael-berardi/steak-dsh#v0.19.0
 ```
 
 Or add only the plugin to a profile:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.18.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.19.0
 ```
 
 ### From source
@@ -210,23 +210,10 @@ for the trust boundary. `steak-dsh --help` is the flag reference.
 
 ## Privacy
 
-Steak DSH sends no usage, error or diagnostic reports anywhere. There is no telemetry or analytics: the launcher forces dsh's telemetry off, every Claude Code process it starts keeps the CLI's traffic and telemetry switches on, and the agy ACP route passes `--disable-telemetry`. The installers set `DO_NOT_TRACK=1` for the npm, corepack and dsh processes they start.
-
-What does reach the network, and when:
-
-- Prompts, file contents and tool results go to the provider for the model you chose: the gateway you passed with `--base-url`, your own local server for `local/<id>`, your logged-in Claude Code CLI, your logged-in Codex CLI, or your signed-in `agy`. That provider receives what you send it. Keys come from the environment variable you name with `--key-env` or from the CLI's own login; Steak DSH never prints them. An expired Codex login is renewed against the login server, and the refreshed login is written back to the Codex CLI's own `auth.json`.
-- `steak-dsh models` asks those same sources what they offer. The Claude Code route uses the CLI's built-in model list; it does not turn off the CLI's telemetry switches to fetch a live catalog. An explicit `claude-code/<model>` id is still sent to the CLI even when it is not listed.
-- Running the installer downloads the release archive and its SHA-256 checksums from GitHub, and, only when needed, official Node binaries from nodejs.org (checksum-verified) and packages from the npm registry. Nothing else in normal use makes a network call.
-
-What is stored locally:
-
-- Your settings in `$DSH_HOME/steak-dsh.json` (default `~/.dsh/steak-dsh.json`): trusted project paths, verify commands and per-model guidance. Any session history is kept by dsh under its own `$DSH_HOME`.
-- TUI crash logs in `$DSH_HOME/steak-dsh/logs/`: the newest 20 files, each mode 0600 in a 0700 folder. They contain the harness's stderr tail and can include text from your session.
-- A Node compile cache in `$XDG_CACHE_HOME/steak-dsh/compile-cache` (or `~/.cache/steak-dsh/compile-cache`), a 0700 folder.
-- Generated overlay patches in an OS temp folder (0600 file in a private 0700 folder), deleted when the run ends; and, for agy ACP sessions, a private `$DSH_HOME/steak-dsh-acp-*` folder with a minimal agent config and an agy log, deleted when the session closes.
-- Only when a host app opts in with `ULTRATERM_UI_TRANSCRIPT_FILE` and `ULTRATERM_UI_SESSION_ID`, the TUI publishes the conversation as a 0600 JSONL file in a 0700 folder at that path. Those variables are removed from every child process.
-
-To delete local data, remove `$DSH_HOME` and the compile cache folder above, then follow the removal steps in [Install](#install). Login and sign-in data kept by the Claude Code, Codex or agy CLIs belongs to those tools; remove it with their own logout commands.
+No telemetry, analytics, crash reports or automatic update checks; installers disable npm's update notifier.
+Prompts go only to the model provider you choose; login keys stay with their CLIs.
+Local logs, caches and temp files have bounded lifetimes; there are no update prompts.
+See [PRIVACY.md](PRIVACY.md) for egress, storage, retention and deletion details.
 
 ## Recorded benchmarks
 
