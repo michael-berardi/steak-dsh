@@ -62,6 +62,13 @@ function withConfigDirectory(env) {
   const output = {};
   for (const [key, value] of Object.entries(env)) if (value !== undefined) output[key] = value;
   if (output.STEAK_DSH_CLAUDE_CODE_CONFIG_DIR) output.CLAUDE_CONFIG_DIR = output.STEAK_DSH_CLAUDE_CODE_CONFIG_DIR;
+  // Every CLI process we start is quiet, including `auth status` and model discovery, not just requests.
+  Object.assign(output, {
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    DISABLE_TELEMETRY: "1",
+    DISABLE_ERROR_REPORTING: "1",
+    DO_NOT_TRACK: "1",
+  });
   return output;
 }
 
@@ -505,23 +512,19 @@ export function processEnvironment(
     CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
     DISABLE_TELEMETRY: "1",
     DISABLE_ERROR_REPORTING: "1",
+    DO_NOT_TRACK: "1",
   });
   if (typeof extraBody.max_tokens === "number") env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(extraBody.max_tokens);
   return env;
 }
 
 /**
- * The environment for model discovery only: the request environment without the two switches that make the CLI skip
- * its live model catalog. With CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC or DISABLE_TELEMETRY set, the CLI answers the
- * initialize request from a short built-in list (5 rows instead of the login's 14, measured on CLI 2.1.322), so newer
- * models the login can use were not offered. Discovery sends no prompt, so the catalog fetch costs nothing on the
- * plan; requests keep the full quiet environment.
+ * The environment for model discovery. It is the request environment: the CLI answers from its built-in catalog with
+ * the telemetry switches set. Fetching the live catalog would require unsetting them, so discovery never does that.
+ * Explicit `claude-code/<model>` ids still go to the CLI even when they are not in the built-in list.
  */
 export function discoveryEnvironment(input) {
-  const env = processEnvironment(input, {});
-  delete env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
-  delete env.DISABLE_TELEMETRY;
-  return env;
+  return processEnvironment(input, {});
 }
 
 async function writeFrame(child, frame, timeoutMs, signal) {

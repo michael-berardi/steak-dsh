@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.0 - 2026-11-26
+
+- **Update notice and `steak-dsh update`.** `chat` and `tui` on a terminal check once a day, in the background, for a newer stable release: one anonymous GET of the public GitHub release record. They print a two-line notice on stderr after the session. `run`, piped output, CI, agent hosts and `STEAK_DSH_NO_UPDATE_CHECK=1` (or `updates.checkAutomatically: false`) never check.
+- `steak-dsh update` installs the new release. npm global copies go through npm. Installer copies run the release's own installer once its SHA-256 matches `SHA256SUMS`, and that installer checks the archive the same way. Also new: `update --check` (exit 0 current, 10 newer, 1 failed), `--skip`, `--auto on|off|status` (automatic installs, off by default) and `--rollback`.
+- The installers keep the previously current release as the only rollback copy. The launcher removes it after the new release finishes a session, or after 7 days.
+- **No telemetry from any process Steak DSH starts.** The launcher and the `dsh plugin` spawn force `DSH_TELEMETRY_MODE=DISABLED` and `DO_NOT_TRACK=1`; an inherited `DSH_TELEMETRY_MODE=FEEDBACK_ONLY` is ignored. Every Claude Code CLI process keeps `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING` and `DO_NOT_TRACK`, including `auth status` and model discovery, which now uses the CLI's built-in catalog; explicit `claude-code/<model>` ids still work. Both installers set `DO_NOT_TRACK=1` and `DSH_TELEMETRY_MODE=DISABLED` for the npm, corepack and dsh processes they start.
+- **Bounded local data.** TUI crash logs keep the newest 20 files (0600 files in a 0700 folder). The launcher prunes its Node compile cache at start: entries older than 30 days or beyond 4096 files go, and symlinks are never followed.
+- Docs: [updates](docs/updates.md), a README Updates section, a short README Privacy section, and `PRIVACY.md` with every network request and every local write, its lifetime and how to delete it. Tests: `test/update.test.js` and `test/privacy.test.js`, with no network.
+
 ## 0.17.0 - 2026-11-25
 
 - **Warm subagent fork on demand (`tool-subagent-fork`).** Included in `more_tools` (`plugins/more-tools.js` `DEFAULT_ROWS`) and `long.patch.yml`, while remaining disabled in `cordis.patch.yml` so normal one-shot runs still pay zero schema tokens for delegation tools.

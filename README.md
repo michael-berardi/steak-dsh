@@ -41,21 +41,22 @@ steak-dsh doctor
 steak-dsh run --permission workspace-write --verify "npm test" "fix the failing parser test"
 ```
 
-Run the installer again to update. Overrides: `STEAK_DSH_HOME`, `STEAK_DSH_BIN_DIR`,
+`steak-dsh update` installs a newer release ([updates](docs/updates.md)); running the installer again also works.
+Overrides: `STEAK_DSH_HOME`, `STEAK_DSH_BIN_DIR`,
 `STEAK_DSH_VERSION`, `STEAK_DSH_DSH_VERSION`, `STEAK_DSH_RELEASE_BASE`.
-To remove it, delete the install directory and its command shims, then run
+To remove it, delete the install directory, its command shims and `~/.cache/steak-dsh`, then run
 `dsh plugin --profile headless remove steak-dsh` if you added the profile bundle.
 
 Already have Node and a supported dsh? Install only the launcher:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.17.0
+npm i -g github:michael-berardi/steak-dsh#v0.20.0
 ```
 
 Or add only the plugin to a profile:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.17.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.20.0
 ```
 
 ### From source
@@ -207,6 +208,21 @@ A project's `.steak-dsh/config.json` is read only if the project is listed under
 See [profiles](docs/profiles.md) for the bundle switches and `--long`,
 [terminal UI](docs/terminal.md) for keys and rendered examples, and [security](SECURITY.md)
 for the trust boundary. `steak-dsh --help` is the flag reference.
+
+## Updates
+
+`chat` and `tui` check for a newer stable release once a day, in the background, and print a two-line notice after
+the session. `steak-dsh update` installs it after checking the release's SHA-256 sums. `steak-dsh update --auto on`
+installs future releases automatically; this is off by default. See [updates](docs/updates.md) for opt-outs, `--check`,
+`--skip` and rollback.
+
+## Privacy
+
+No telemetry, analytics or crash reports: dsh and every CLI Steak DSH starts run with telemetry off.
+Prompts go only to the model provider you choose; login keys stay with their own CLIs.
+The one request it makes on its own is the update check: at most one anonymous GET a day of this project's public GitHub release record, from `chat` and `tui` only; `STEAK_DSH_NO_UPDATE_CHECK=1` turns it off.
+Stored locally: your settings, a small update cache, and crash logs and a compile cache that are pruned automatically.
+[PRIVACY.md](PRIVACY.md) lists what is sent, what is stored and how to delete it.
 
 ## Recorded benchmarks
 

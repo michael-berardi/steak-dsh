@@ -9,6 +9,10 @@
 # STEAK_DSH_DSH_VERSION (the dsh version to install when missing, default 0.2.2-rc.1).
 set -eu
 
+# npm/corepack/dsh processes started here send no analytics or usage traffic.
+DO_NOT_TRACK=1; export DO_NOT_TRACK
+DSH_TELEMETRY_MODE=DISABLED; export DSH_TELEMETRY_MODE
+
 REPO="michael-berardi/steak-dsh"
 NODE_MIN_MAJOR=22
 DSH_MIN="0.2.2-rc.1"
@@ -205,9 +209,13 @@ swap_link() { # swap_link <target> <link>
   if rm -f "$2" && mv "$2.tmp.$$" "$2"; then return 0; fi
   rm -f "$2.tmp.$$"; die "cannot update the link $2"
 }
+# The release that was current stays as the one rollback copy (`steak-dsh update --rollback`); the launcher removes it
+# once the new release has finished a session, or after 7 days. Every other old release folder goes now.
+PREV=""
+[ -L "$APP/current" ] && PREV=$(readlink "$APP/current") && PREV=${PREV##*/}
 swap_link "$REL" "$APP/current"
 for d in "$APP"/release-*; do
-  [ -d "$d" ] && [ ! -L "$d" ] && [ "$d" != "$REL" ] && rm -rf "$d"
+  [ -d "$d" ] && [ ! -L "$d" ] && [ "$d" != "$REL" ] && [ "${d##*/}" != "$PREV" ] && rm -rf "$d"
 done
 
 # The private Node, when we fetched one, goes on PATH inside the shims only.

@@ -14,9 +14,12 @@ function Install-SteakDsh {
   $savedProgressPref = $ProgressPreference
   $savedPath = $env:PATH
   $savedEnv = @{}
-  foreach ($n in 'npm_config_update_notifier', 'npm_config_fund', 'npm_config_audit', 'COREPACK_ENABLE_DOWNLOAD_PROMPT', 'STEAK_DSH_DSH_BIN') {
+  foreach ($n in 'npm_config_update_notifier', 'npm_config_fund', 'npm_config_audit', 'COREPACK_ENABLE_DOWNLOAD_PROMPT', 'STEAK_DSH_DSH_BIN', 'DO_NOT_TRACK', 'DSH_TELEMETRY_MODE') {
     $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n)
   }
+  # npm/corepack/dsh processes started here send no analytics or usage traffic.
+  $env:DO_NOT_TRACK = '1'
+  $env:DSH_TELEMETRY_MODE = 'DISABLED'
   $ErrorActionPreference = 'Stop'
   # Windows PowerShell 5.1: TLS 1.2 must be opted in for github.com, and the progress bar makes downloads very slow.
   $ProgressPreference = 'SilentlyContinue'
@@ -355,10 +358,13 @@ process.exit(cmpPre(a[3], b[3]) >= 0 ? 0 : 1);
     $current = Join-Path $app 'current'
     # Test-Path is false for a broken junction or link, so look the item up directly.
     $oldCurrent = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+    # The release that was current stays as the one rollback copy (`steak-dsh update --rollback`); the launcher removes it
+    # once the new release has finished a session, or after 7 days. Every other old release folder goes now.
+    $prevName = if ($oldCurrent -and $oldCurrent.Target) { Split-Path -Leaf (@($oldCurrent.Target)[0]) } else { $null }
     if ($oldCurrent) { $oldCurrent.Delete() }
     if ($onWindows) { New-Item -ItemType Junction -Path $current -Target $rel | Out-Null }
     else { New-Item -ItemType SymbolicLink -Path $current -Target $rel | Out-Null }
-    Get-ChildItem $app -Directory | Where-Object { $_.Name -like 'release-*' -and $_.Name -ne "release-$version" -and -not $_.LinkType } |
+    Get-ChildItem $app -Directory | Where-Object { $_.Name -like 'release-*' -and $_.Name -ne "release-$version" -and $_.Name -ne $prevName -and -not $_.LinkType } |
       Remove-Item -Recurse -Force
 
     # A dsh shim only when no dsh existed on PATH; an existing dsh is never shadowed, and a file we did not write
