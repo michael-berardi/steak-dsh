@@ -2,8 +2,8 @@
 // A fake ACP agent for the agy ACP route tests: newline JSON-RPC over stdio, exactly the ACP v1 shape.
 // FAKE_ACP_MODE: text | tool | parallel | auth | cancel | options | models. FAKE_ACP_LOG: one JSON line per event.
 // It never touches an agy credential; the MCP call goes to the loopback bridge the client advertises in session/new.
-import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { appendFileSync, readSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 
 const argv = process.argv.slice(2);
 const mode = process.env.FAKE_ACP_MODE ?? "text";
@@ -88,9 +88,8 @@ async function runPrompt(id, params) {
   promptRequest = undefined;
 }
 
-const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
-for await (const line of input) {
-  if (!line.trim()) continue;
+function handle(line) {
+  if (!line.trim()) return;
   const message = JSON.parse(line);
   log({ event: "in", method: message.method, id: message.id, params: message.params, cancel: message.params?.id });
   if (message.id !== undefined && message.method) {
@@ -120,7 +119,7 @@ for await (const line of input) {
       default:
         err(message.id, -32601, `unknown method ${message.method}`);
     }
-    continue;
+    return;
   }
   if (message.method === "session/cancel" && promptRequest !== undefined) {
     const id = promptRequest;
@@ -129,3 +128,32 @@ for await (const line of input) {
   }
   if (message.method === "$/cancel_request") err(message.params?.id, -32800, "Request cancelled");
 }
+
+// Newline-delimited input, split by hand (not readline) so that the SIGINT handler below can finish the same buffer.
+let buffered = "";
+const decoder = new StringDecoder("utf8"); // one decoder for both paths: a character split across them still decodes
+const receive = (bytes) => {
+  buffered += decoder.write(bytes);
+  for (let end = buffered.indexOf("\n"); end !== -1; end = buffered.indexOf("\n")) {
+    const line = buffered.slice(0, end).replace(/\r$/, "");
+    buffered = buffered.slice(end + 1);
+    handle(line);
+  }
+};
+process.stdin.on("data", receive);
+process.stdin.on("end", () => { if (buffered) { const line = buffered; buffered = ""; handle(line); } });
+
+// The route stops agy with SIGINT right after writing its last messages (session/cancel on an abort). A real agent
+// treats SIGINT as an interrupt; Node's default for it is to die on the spot, which under full-suite load could happen
+// before the fake was scheduled to read the session/cancel already sitting in its stdin pipe, and the cancel test then
+// saw no cancel. So, like a real agent, the fake first handles every message it was sent, then exits.
+process.on("SIGINT", () => {
+  const chunk = Buffer.alloc(65_536);
+  for (;;) {
+    let read;
+    try { read = readSync(0, chunk, 0, chunk.length, null); } catch { break; } // EAGAIN: nothing more is waiting (stdin is non-blocking)
+    if (read === 0) break; // end of input
+    receive(chunk.subarray(0, read));
+  }
+  process.exit(130);
+});

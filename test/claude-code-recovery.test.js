@@ -50,8 +50,10 @@ async function rig(behaviour, body) {
   writeFileSync(executable, FAKE); chmodSync(executable, 0o755); writeFileSync(spawns, "");
   execFileSync(executable, ["auth", "status"]); // first launch of a new executable is scanned by the OS: keep it out of the timed call
   const bodies = [];
+  const arrivals = [];
   let attempts = 0;
   const upstream = http.createServer(async (request, response) => {
+    arrivals.push(Date.now());
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     bodies.push(Buffer.concat(chunks).toString("utf8"));
@@ -64,6 +66,8 @@ async function rig(behaviour, body) {
   try {
     await body({
       bodies,
+      /** Date.now() as each request reached the fake API: gaps between sends, free of process start-up time. */
+      arrivals,
       attempts: () => attempts,
       pids: () => readFileSync(spawns, "utf8").split("\n").filter(Boolean).map(Number),
       /** The same turn through the real createClaudeCodeAdapter wiring: returns every chunk the harness would receive. */
@@ -117,12 +121,19 @@ test("a connection that never answers is retried quietly without restarting Clau
   sse(response, START, textStart, textDelta("answer"), ...FINISH);
   response.end();
 }, async (r) => {
-  const started = Date.now();
   const { output } = await r.run();
   assert.equal(output.message.stop_reason, "end_turn");
   assert.equal(r.attempts(), 2);
   assert.equal(r.pids().length, 1, "the same process served both attempts");
-  assert.ok(Date.now() - started < 2_500, "recovered at the 300 ms first-byte limit, not the full budget");
+  // Timed from the first send to the quiet retry, not from run(): starting the CLI process is outside the limit under
+  // test and, under load, alone took over a second (a whole-run bound of 2.5 s failed at 3.96 s). The retry is due at
+  // the 300 ms first-byte limit plus the relay's 400 ms backoff; waiting out the full 1 000 ms budget instead could not
+  // resend before 1 000 + 400 ms, and the 1.4 s stream limit not before 1.8 s. Load only makes a wrong wait later.
+  const { firstByteMs } = idleLimits(BUDGET, {}, {});
+  assert.equal(firstByteMs, 300);
+  const RELAY_BACKOFF_MS = 400; // turn-relay.js DEFAULT_RETRY.baseDelayMs, first retry
+  const resentAfter = r.arrivals[1] - r.arrivals[0];
+  assert.ok(resentAfter < BUDGET + RELAY_BACKOFF_MS, `recovered at the 300 ms first-byte limit, not the full budget (resent after ${resentAfter} ms)`);
 }));
 
 test("a reply that stalls before any content reached the harness: only that child is stopped and the turn is asked again once", () => rig((attempt, response) => {
