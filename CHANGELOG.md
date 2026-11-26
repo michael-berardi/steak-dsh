@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.1 - 2026-11-26
+
+Privacy hardening: no telemetry from any process this tool starts.
+
+- The launcher and `dsh plugin` spawn now force `DSH_TELEMETRY_MODE=DISABLED` and `DO_NOT_TRACK=1`; an inherited `DSH_TELEMETRY_MODE=FEEDBACK_ONLY` is ignored. The Claude Code route keeps `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING` and `DO_NOT_TRACK` on every CLI process, including `auth status` and model discovery. Model discovery now uses the CLI's built-in catalog instead of unsetting the telemetry switches to fetch a live one; explicit `claude-code/<model>` ids still work.
+- Both installers set `DO_NOT_TRACK=1` and `DSH_TELEMETRY_MODE=DISABLED` for the npm/corepack/dsh processes they start and restore the caller's values afterwards.
+- TUI crash logs are retained at most 20 files (newest kept, 0600 files in a 0700 folder).
+- Added a `## Privacy` section to the README and `test/privacy.test.js` (banned telemetry packages/endpoints in shipped code, quiet launch/install env, bounded log retention).
+
 ## 0.17.0 - 2026-11-25
 
 - **Warm subagent fork on demand (`tool-subagent-fork`).** Included in `more_tools` (`plugins/more-tools.js` `DEFAULT_ROWS`) and `long.patch.yml`, while remaining disabled in `cordis.patch.yml` so normal one-shot runs still pay zero schema tokens for delegation tools.

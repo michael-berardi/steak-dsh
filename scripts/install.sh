@@ -9,6 +9,10 @@
 # STEAK_DSH_DSH_VERSION (the dsh version to install when missing, default 0.2.2-rc.1).
 set -eu
 
+# npm/corepack/dsh processes started here send no analytics or usage traffic.
+DO_NOT_TRACK=1; export DO_NOT_TRACK
+DSH_TELEMETRY_MODE=DISABLED; export DSH_TELEMETRY_MODE
+
 REPO="michael-berardi/steak-dsh"
 NODE_MIN_MAJOR=22
 DSH_MIN="0.2.2-rc.1"

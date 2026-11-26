@@ -110,14 +110,14 @@ test("overlay order and generated rows for every flag; secrets never leak; temp 
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 
-test("default run: bundle only, danger-full-access, telemetry preserved when set", () => {
+test("default run: bundle only, danger-full-access, telemetry cannot be enabled from the environment", () => {
   const s = scratch();
   try {
-    const result = run(["run", "hello"], s, { DSH_TELEMETRY_MODE: "FEEDBACK_ONLY" });
+    const result = run(["run", "hello"], s, { DSH_TELEMETRY_MODE: "FEEDBACK_ONLY", DO_NOT_TRACK: "" });
     assert.equal(result.status, 0, result.stderr);
     const [rec] = records(s);
     assert.deepEqual(rec.argv, ["headless", "--patch", bundlePatch, "--permission-mode", "danger-full-access", "--approval-policy", "never", "--", "hello"]);
-    assert.equal(rec.telemetry, "FEEDBACK_ONLY");
+    assert.equal(rec.telemetry, "DISABLED");
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 

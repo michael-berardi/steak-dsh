@@ -14,9 +14,12 @@ function Install-SteakDsh {
   $savedProgressPref = $ProgressPreference
   $savedPath = $env:PATH
   $savedEnv = @{}
-  foreach ($n in 'npm_config_update_notifier', 'npm_config_fund', 'npm_config_audit', 'COREPACK_ENABLE_DOWNLOAD_PROMPT', 'STEAK_DSH_DSH_BIN') {
+  foreach ($n in 'npm_config_update_notifier', 'npm_config_fund', 'npm_config_audit', 'COREPACK_ENABLE_DOWNLOAD_PROMPT', 'STEAK_DSH_DSH_BIN', 'DO_NOT_TRACK', 'DSH_TELEMETRY_MODE') {
     $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n)
   }
+  # npm/corepack/dsh processes started here send no analytics or usage traffic.
+  $env:DO_NOT_TRACK = '1'
+  $env:DSH_TELEMETRY_MODE = 'DISABLED'
   $ErrorActionPreference = 'Stop'
   # Windows PowerShell 5.1: TLS 1.2 must be opted in for github.com, and the progress bar makes downloads very slow.
   $ProgressPreference = 'SilentlyContinue'

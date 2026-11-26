@@ -218,19 +218,22 @@ test("launcher: claude-code needs no endpoint or key, refuses an endpoint, and i
   assert.throws(() => parseOptions(["--stock", "--long", "task"]), /cannot be combined with --stock/);
 });
 
-// With either switch set, the CLI answers the model-list request from a short built-in list, so newer models the
-// login can use were not offered. Discovery runs without the two switches; every request keeps them.
-test("model discovery lets the CLI fetch its live catalog; requests stay quiet", async () => {
+// With the switches set, the CLI answers the model-list request from its built-in list rather than fetching a live
+// catalog. Discovery and requests both stay quiet; an explicit model id is still passed to the CLI.
+test("model discovery keeps telemetry off, like every request", async () => {
   const { discoveryEnvironment, processEnvironment } = await import("../claude-code/claude-cli.js");
   const inherited = { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1" };
   const discovery = discoveryEnvironment(inherited);
-  assert.equal(discovery.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, undefined);
-  assert.equal(discovery.DISABLE_TELEMETRY, undefined);
+  assert.equal(discovery.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
+  assert.equal(discovery.DISABLE_TELEMETRY, "1");
+  assert.equal(discovery.DISABLE_ERROR_REPORTING, "1");
+  assert.equal(discovery.DO_NOT_TRACK, "1");
   assert.equal(discovery.CLAUDE_CODE_MAX_RETRIES, "0");
   assert.equal(discovery.ENABLE_TOOL_SEARCH, "false");
   const request = processEnvironment({}, {});
   assert.equal(request.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
   assert.equal(request.DISABLE_TELEMETRY, "1");
+  assert.equal(request.DO_NOT_TRACK, "1");
   assert.throws(() => discoveryEnvironment({ ANTHROPIC_API_KEY: "x" }), /refuses conflicting auth/);
 });
 
