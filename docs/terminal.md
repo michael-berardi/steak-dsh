@@ -80,8 +80,9 @@ Keys: Enter sends; Ctrl-J, Alt-Enter or a trailing `\` then Enter adds a line; U
 Ctrl-A/E/B/F, Alt-B/F, Ctrl-W, Ctrl-U, Ctrl-K, Ctrl-Y edit; holding Backspace for 1.5 s clears the input;
 PageUp/PageDown scroll; Ctrl-O expands tool output; Ctrl-T shows or hides thinking; Esc interrupts the turn; Ctrl-C
 interrupts, then clears the editor, then quits; Ctrl-D quits on an empty editor. Pasted text (bracketed paste) is
-inserted as typed text and never sent or interpreted. `/new`, `/resume <id>` and `/exit` are local; any other
-`/command` goes to the harness (for example `/compact`, `/permission <preset>`).
+inserted as typed text and never sent or interpreted. `/new`, `/resume <id>`, `/model <provider>/<model-id>` and `/exit` are local; any other
+`/command` goes to the harness (for example `/compact`, `/permission <preset>`). `/model <provider>/<model-id>` rewrites the overlay,
+cleanly restarts the SDK child on the new model, and calls `session/resume` on the same session id so your conversation continues in place.
 
 `--permission` is applied with
 `/permission <preset>` before the first prompt of every session and again after every restart and `/resume`. A
@@ -106,7 +107,7 @@ Before 0.9.0 a missing overlay killed every restart at boot, and the notice show
 
 What it cannot match: text arrives per committed step, not token by token (the SDK wire carries committed messages
 only); the editor is keyboard-only (no IME placement, mouse or autocomplete); Markdown is minimal and code is not
-syntax-highlighted; a declared gateway route shows no cost; `--add-dir` has no effect over the SDK wire; the model is fixed for the
-process. `NO_COLOR`, a dumb terminal, or a pipe turns colour off; on a pipe `tui` runs in plain line mode (each stdin
+syntax-highlighted; a declared gateway route shows no cost; `--add-dir` has no effect over the SDK wire; switching models with `/model`
+restarts the SDK child on the same session id. `NO_COLOR`, a dumb terminal, or a pipe turns colour off; on a pipe `tui` runs in plain line mode (each stdin
 line is a message, approvals are refused).
 

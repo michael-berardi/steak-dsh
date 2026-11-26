@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { render, renderEvent, shortArgs } from "../lib/render.js";
+
+const hasDsh = spawnSync("dsh", ["--version"], { encoding: "utf8" }).status === 0;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const launcher = join(root, "bin", "steak-dsh");
@@ -141,4 +144,131 @@ test("chat: a line that looks like a flag (--help) is sent as task text after --
     assert.ok(at >= 0, "the task words are separated by --");
     assert.deepEqual(turns[0].argv.slice(at), ["--", "--help"], "--help is task text, not a dsh flag");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("chat: /model switches models in place, rewrites the overlay, and keeps the same session id", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "steak-dsh-chat-model-"));
+  try {
+    const fake = join(dir, "fake-dsh.mjs");
+    const record = join(dir, "record.jsonl");
+    writeFileSync(fake, FAKE_DSH, { mode: 0o755 });
+    const child = spawn(process.execPath, [
+      launcher, "chat", "--model", "acme/m1", "--base-url", "https://gw.example/v1",
+      "--api", "openai-completions", "--key-env", "STEAK_CHAT_KEY",
+    ], {
+      cwd: dir,
+      env: { ...process.env, STEAK_DSH_DSH_BIN: fake, FAKE_DSH_RECORD: record, DSH_HOME: join(dir, "home"), STEAK_CHAT_KEY: "test-key" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdin.write("first turn\n/model\n/model bad-no-slash\n/model acme/m2\nsecond turn\n/model beta/org/m3\nthird turn\n/exit\n");
+    const code = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`chat timed out; stdout: ${stdout}`)); }, 30_000);
+      child.on("close", (c) => { clearTimeout(timer); resolve(c); });
+    });
+    assert.equal(code, 0, stderr);
+    assert.match(stdout, /current model: acme\/m1/);
+    assert.match(stdout, /error: \/model must be <provider>\/<model-id>, got "bad-no-slash"/);
+    assert.match(stdout, /switched model to acme\/m2 \(session sess-1\)/);
+    assert.match(stdout, /switched model to beta\/org\/m3 \(session sess-1\)/);
+    const turns = readFileSync(record, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(turns.length, 3, "three actual turns ran");
+    const overlayRows = (turn) => JSON.parse(turn.patches.find((p) => p.path.endsWith("overlay.yml")).content);
+    const r0 = overlayRows(turns[0]);
+    const r1 = overlayRows(turns[1]);
+    const r2 = overlayRows(turns[2]);
+    assert.deepEqual(r0.find((r) => r.id === "agent-default-model").config, { provider: "acme", model: "m1" });
+    assert.ok(r0.some((r) => r.id === "llm-pi-ai"), "first turn keeps gateway route");
+    assert.deepEqual(r1.find((r) => r.id === "agent-default-model").config, { provider: "acme", model: "m2" });
+    assert.ok(r1.some((r) => r.id === "llm-pi-ai"), "same-provider switch keeps gateway route");
+    assert.deepEqual(r2.find((r) => r.id === "agent-default-model").config, { provider: "beta", model: "org/m3" });
+    assert.equal(r2.some((r) => r.id === "llm-pi-ai"), false, "cross-provider switch drops old gateway route");
+    assert.equal(turns[1].argv[turns[1].argv.indexOf("--session-id") + 1], "sess-1", "second turn keeps sessionId");
+    assert.equal(turns[2].argv[turns[2].argv.indexOf("--session-id") + 1], "sess-1", "third turn keeps sessionId");
+    for (const turn of turns) {
+      const overlay = turn.patches.find((p) => p.path.endsWith("overlay.yml"));
+      assert.equal(existsSync(overlay.path), false, "all generated overlays cleaned up on exit");
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("chat: /model refuses local/, removed routes, and bundle routes under --stock", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "steak-dsh-chat-route-rules-"));
+  try {
+    const fake = join(dir, "fake-dsh.mjs");
+    const record = join(dir, "record.jsonl");
+    writeFileSync(fake, FAKE_DSH, { mode: 0o755 });
+    const child = spawn(process.execPath, [launcher, "chat", "--stock", "--model", "acme/m1"], {
+      cwd: dir,
+      env: { ...process.env, STEAK_DSH_DSH_BIN: fake, FAKE_DSH_RECORD: record, DSH_HOME: join(dir, "home") },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdin.write("/model local/m1\n/model antigravity/x\n/model claude-code/x\nhello\n/exit\n");
+    const code = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`chat timed out; stdout: ${stdout}`)); }, 30_000);
+      child.on("close", (c) => { clearTimeout(timer); resolve(c); });
+    });
+    assert.equal(code, 0, stderr);
+    assert.match(stdout, /cannot switch to or from local/);
+    assert.match(stdout, /removed/i);
+    assert.match(stdout, /--stock leaves out/);
+    const [turn] = readFileSync(record, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const rows = JSON.parse(turn.patches.find((p) => p.path.endsWith("overlay.yml")).content);
+    assert.deepEqual(rows.find((r) => r.id === "agent-default-model").config, { provider: "acme", model: "m1" }, "refused switches kept original model");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("real dsh chat: /model switches to the new model on the next turn while preserving conversation history", { skip: !hasDsh }, async () => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      requests.push({ model: parsed.model, messages: parsed.messages });
+      const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+      const chunk = (delta, finish, extra = {}) => ({ id: "x", object: "chat.completion.chunk", model: parsed.model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify(chunk({ role: "assistant", content: "chat-" + parsed.model }, null))}\n\n`);
+      res.write(`data: ${JSON.stringify(chunk({}, "stop", { usage }))}\n\n`);
+      res.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const port = server.address().port;
+  const dir = mkdtempSync(join(tmpdir(), "steak-dsh-real-chat-model-"));
+  const work = join(dir, "w");
+  mkdirSync(work);
+  try {
+    const child = spawn(process.execPath, [
+      launcher, "chat", "--model", "gw/model-one", "--base-url", `http://127.0.0.1:${port}/v1`,
+      "--api", "openai-completions", "--key-env", "FAKE_KEY", "--compat", '{"supportsDeveloperRole":false}',
+      "--context-window", "100000", "--no-shell",
+    ], {
+      cwd: work,
+      env: { ...process.env, FAKE_KEY: "x", DSH_HOME: join(dir, "home"), DSH_TELEMETRY_MODE: "DISABLED" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (c) => { stdout += c; });
+    child.stderr.on("data", (c) => { stderr += c; });
+    child.stdin.write("remember-chat-beta\n/model gw/model-two\nfollow up\n/exit\n");
+    const code = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`real chat timed out; stdout: ${stdout}; stderr: ${stderr}`)); }, 60_000);
+      child.on("close", (c) => { clearTimeout(timer); resolve(c); });
+    });
+    assert.equal(code, 0, stderr);
+    assert.equal(requests.length, 2, `expected 2 model requests, got ${requests.length}`);
+    assert.equal(requests[0].model, "model-one");
+    assert.equal(requests[1].model, "model-two", "second turn reached model-two");
+    assert.match(JSON.stringify(requests[1].messages), /remember-chat-beta/, "second turn preserved turn 1 conversation history");
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

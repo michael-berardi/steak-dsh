@@ -49,13 +49,13 @@ To remove it, delete the install directory and its command shims, then run
 Already have Node and a supported dsh? Install only the launcher:
 
 ```sh
-npm i -g github:michael-berardi/steak-dsh#v0.16.0
+npm i -g github:michael-berardi/steak-dsh#v0.17.0
 ```
 
 Or add only the plugin to a profile:
 
 ```sh
-dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.16.0
+dsh plugin --profile headless add github:michael-berardi/steak-dsh#v0.17.0
 ```
 
 ### From source
@@ -77,9 +77,13 @@ steak-dsh run --json --owned-path "$PWD/src" --no-shell "rename the parser helpe
 steak-dsh --help
 ```
 
-`run` emits text or, with `--json`, dsh NDJSON. `chat` is line-based; `tui` is full-screen
-and requires `--model`. Only the TUI can answer approval prompts; `run` and `chat`
-refuse requests needing approval even with `--approval-policy ask`.
+`run` emits text or, with `--json`, dsh NDJSON. Pass `--idle-timeout <sec>` (or set
+`STEAK_DSH_IDLE_TIMEOUT_SEC`) with `run --json` to abort stalled streams (paused while a
+`tool_call` awaits its `tool_result`), reap the child process group cleanly, emit a final
+`stalled-stream` NDJSON/stderr cause, and exit `124`. `chat` is line-based; `tui` is
+full-screen and requires `--model`. Both `chat` and `tui` support `/model <provider>/<model-id>`
+to switch models in place while keeping the same session id. Only the TUI can answer approval
+prompts; `run` and `chat` refuse requests needing approval even with `--approval-policy ask`.
 `--add-dir` does not work over the TUI's SDK connection.
 
 For a gateway, pass `--model provider/model`, `--base-url`, `--api` and `--key-env`.

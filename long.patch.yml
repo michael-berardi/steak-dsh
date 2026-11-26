@@ -3,8 +3,10 @@
 # The default bundle needs no profile: its more_tools tool switches these rows on when the model asks. This file only
 # does it before the first request, for scripts that pass --long. The finish guard is on in the default bundle.
 
-# Delegation: the subagent tool, the follow-up tool for a running child, and the working-directory switch.
+# Delegation: the subagent, fork and follow-up tools, and the working-directory switch.
 - id: tool-subagent
+  disabled: false
+- id: tool-subagent-fork
   disabled: false
 - id: tool-subagent-control
   disabled: false

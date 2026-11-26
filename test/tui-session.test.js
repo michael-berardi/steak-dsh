@@ -1,10 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { validateModelSwitch } from "../lib/args.js";
 import { Controller } from "../lib/tui/session.js";
 import { ev, makeFakeDsh, status, textMsg, toolResult, until } from "./tui-helpers.js";
+
+const hasDsh = spawnSync("dsh", ["--version"], { encoding: "utf8" }).status === 0;
 
 const OPTIONS = { provider: "gw", model: "example-model-1", effort: "high", permission: "workspace-write", addDirs: [] };
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -417,4 +422,346 @@ test("missing permission uses full access before the first prompt", async () => 
     await c.submit("hello");
     assert.equal(fake.permissions()[0].text, "/permission danger-full-access");
   } finally { await finish(c, fake); }
+});
+
+test("/model switches models in place: rewrites overlay, shuts down old child, respawns and resumes the same session id", async () => {
+  const { overlayFiles } = await import("../lib/overlay.js");
+  const { sdkArgs } = await import("../lib/tui/index.js");
+  const fake = makeFakeDsh({
+    checkPatches: true,
+    onPrompt: [
+      status("running"),
+      ev({ type: "turn/start", turn: 1 }),
+      ev({ type: "assistant/message", turn: 1, step: 1, stream: [], message: textMsg("first reply"), usage: { inputTokens: 100, outputTokens: 20 } }),
+      ev({ type: "turn/end", turn: 1, reason: { kind: "completed" } }),
+      status("idle"),
+    ],
+  });
+  const baseOpts = {
+    ...OPTIONS,
+    baseUrl: "https://gw.example/v1",
+    api: "openai-completions",
+    keyEnv: "STEAK_TEST_KEY",
+    contextWindow: 64000,
+    approvalPolicy: "never",
+    ownedPaths: [],
+    patches: [],
+    stock: true,
+  };
+  const overlay = overlayFiles(baseOpts, process.cwd(), { sdk: true });
+  const c = new Controller({
+    bin: fake.bin,
+    prepare: (opts) => sdkArgs(opts ? overlay.update(opts) : overlay.ensure()),
+    options: baseOpts,
+    cwd: process.cwd(),
+    env: fake.env,
+    timing: { killGraceMs: 300, shutdownGraceMs: 1500 },
+  });
+  try {
+    await c.start();
+    const session = c.state.sessionId;
+    await c.submit("turn one");
+    await until(() => c.state.phase === "complete", "first turn complete");
+    const firstPid = fake.starts()[0].start;
+    const firstOverlayPath = fake.starts()[0].argv.at(-1);
+    const firstOverlayRows = JSON.parse(readFileSync(firstOverlayPath, "utf8"));
+    assert.deepEqual(firstOverlayRows.find((r) => r.id === "agent-default-model").config, { provider: "gw", model: "example-model-1", reasoningEffort: "high" });
+    assert.ok(firstOverlayRows.some((r) => r.id === "llm-pi-ai"), "initial overlay carries gateway route");
+
+    // Same-provider switch preserves gateway settings and resumes the same session id.
+    await c.submit("/model gw/example-model-2");
+    assert.ok(!alive(firstPid), "previous child was stopped cleanly");
+    assert.equal(fake.starts().length, 2, "a new child was spawned");
+    const secondPid = fake.starts()[1].start;
+    const secondOverlayPath = fake.starts()[1].argv.at(-1);
+    assert.notEqual(secondOverlayPath, firstOverlayPath, "overlay was rewritten for the new model");
+    const secondOverlayRows = JSON.parse(readFileSync(secondOverlayPath, "utf8"));
+    assert.deepEqual(secondOverlayRows.find((r) => r.id === "agent-default-model").config, { provider: "gw", model: "example-model-2", reasoningEffort: "high" });
+    assert.ok(secondOverlayRows.some((r) => r.id === "llm-pi-ai"), "same-provider switch keeps gateway route");
+    const secondInit = fake.received("initialize")[1].params;
+    assert.equal(secondInit.provider, "gw");
+    assert.equal(secondInit.model, "example-model-2");
+    assert.equal(fake.received("session/resume").at(-1).params.sessionId, session, "resumes the exact same session id");
+    assert.equal(c.state.sessionId, session, "session id is preserved");
+    assert.equal(c.state.model, "gw/example-model-2");
+    assert.equal(c.state.usage.requests, 1, "prior usage is preserved");
+    assert.ok(c.state.blocks.some((b) => b.kind === "assistant" && b.text === "first reply"), "prior transcript blocks are preserved");
+
+    // Cross-provider switch drops old gateway route and still resumes the same session id.
+    await c.submit("/model alt-provider/org/model-3");
+    assert.ok(!alive(secondPid), "second child was stopped cleanly");
+    assert.equal(fake.starts().length, 3);
+    const thirdOverlayRows = JSON.parse(readFileSync(fake.starts()[2].argv.at(-1), "utf8"));
+    assert.deepEqual(thirdOverlayRows.find((r) => r.id === "agent-default-model").config, { provider: "alt-provider", model: "org/model-3", reasoningEffort: "high" });
+    assert.equal(thirdOverlayRows.some((r) => r.id === "llm-pi-ai"), false, "cross-provider switch clears old gateway route");
+    const thirdInit = fake.received("initialize")[2].params;
+    assert.equal(thirdInit.provider, "alt-provider");
+    assert.equal(thirdInit.model, "org/model-3");
+    assert.equal(fake.received("session/resume").at(-1).params.sessionId, session);
+    assert.equal(c.state.model, "alt-provider/org/model-3");
+    assert.equal(c.state.contextWindow, undefined, "cross-provider switch clears stale context window");
+
+    // Subsequent prompts continue on the new child with the same session id.
+    await c.submit("turn two");
+    await until(() => fake.received("session/prompt").length === 2, "second prompt reached new child");
+    assert.equal(fake.received("session/prompt").at(-1).params.sessionId, session);
+  } finally {
+    await finish(c, fake);
+    overlay.cleanup();
+  }
+});
+
+test("/model validates syntax strictly without touching the running child, and recovers from a stuck crash or failed switch", async () => {
+  const { fake, c } = await boot({
+    initialize: { errorForProvider: "missing-provider" },
+    onPrompt: [{ crash: "SIGKILL", onStart: 0 }],
+  });
+  try {
+    const session = c.state.sessionId;
+    const initialPid = fake.starts()[0].start;
+
+    // Bare /model shows current model without respawning.
+    await c.submit("/model");
+    assert.match(c.state.blocks.at(-1).text, /current model: gw\/example-model-1/);
+    assert.equal(fake.starts().length, 1);
+
+    // Invalid syntax rejects without respawning.
+    for (const bad of ["/model no-slash", "/model /leading", "/model trailing/", "/model a//b", "/model a/b extra"]) {
+      await c.submit(bad);
+      assert.match(c.state.blocks.at(-1).text, /\/model must be <provider>\/<model-id>/);
+    }
+    assert.equal(fake.starts().length, 1, "invalid /model never restarts the child");
+    assert.ok(alive(initialPid));
+
+    // Same model is a no-op notice.
+    await c.submit("/model gw/example-model-1");
+    assert.match(c.state.blocks.at(-1).text, /already using gw\/example-model-1/);
+    assert.equal(fake.starts().length, 1);
+
+    // Crash the first child, then recover with /model on the same session id.
+    await c.submit("trigger crash");
+    await until(() => !c.state.childAlive, "crash seen");
+    await c.submit("/model other/model-2");
+    assert.equal(fake.starts().length, 2);
+    assert.equal(c.state.childAlive, true);
+    assert.equal(c.state.model, "other/model-2");
+    assert.equal(c.state.sessionId, session);
+    assert.equal(fake.received("session/resume").at(-1).params.sessionId, session);
+
+    // Failed switch (initialize error) reports error, kills broken child, and restores previous model metadata.
+    await c.submit("/model missing-provider/x");
+    assert.equal(c.state.childAlive, false);
+    assert.equal(c.state.model, "other/model-2", "reverts model metadata on failed switch");
+    assert.equal(c.o.provider, "other");
+    assert.ok(c.state.blocks.some((b) => b.kind === "error" && /model switch failed: no adapter registered/.test(b.text)));
+  } finally {
+    await finish(c, fake);
+  }
+});
+
+test("/model while busy with an open approval refuses the approval fail-closed, interrupts, and resumes the same session", async () => {
+  const { fake, c } = await boot({
+    onPrompt: [
+      status("running"),
+      ev({ type: "turn/start", turn: 1 }),
+      ev({ type: "tool/call", turn: 1, step: 1, callId: "c1", name: "bash", arguments: '{"command":"sleep 999"}' }),
+      { request: APPROVAL, name: "open-approval", noWait: true },
+      { hang: true },
+    ],
+  });
+  try {
+    const session = c.state.sessionId;
+    await c.submit("run tool");
+    await until(() => c.state.prompt, "approval opened");
+    const firstPid = fake.starts()[0].start;
+    await c.submit("/model alt/model-2");
+    assert.ok(!alive(firstPid), "interrupted child was terminated");
+    assert.equal(c.state.prompt, undefined, "open approval was closed");
+    assert.equal(c.pending.size, 0);
+    assert.equal(c.state.blocks.find((b) => b.kind === "tool").status, "error", "pending tool card settled as interrupted");
+    assert.equal(fake.entries().some((e) => e.answer && e.result?.outcome === "allowed-once"), false, "approval was never allowed");
+    assert.equal(c.state.sessionId, session);
+    assert.equal(c.state.model, "alt/model-2");
+    assert.equal(fake.received("session/resume").at(-1).params.sessionId, session);
+  } finally {
+    await finish(c, fake);
+  }
+});
+
+test("/model overlaps cleanly with Esc cancel and concurrent message submit (no double spawn or leaked child)", async () => {
+  // 1. Esc (cancel) immediately followed by /model waits for cancel to finish, switches to the new model, and leaves only 1 child.
+  {
+    const { fake, c } = await boot({
+      initialize: { delayMs: 80 },
+      onPrompt: [status("running"), ev({ type: "turn/start", turn: 1 }), { hang: true }],
+    });
+    try {
+      const session = c.state.sessionId;
+      await c.submit("run");
+      await until(() => c.state.busy, "busy");
+      const cancelling = c.cancel();
+      const switching = c.submit("/model next-gw/model-2");
+      await Promise.all([cancelling, switching]);
+      const starts = fake.starts();
+      const live = starts.filter((s) => alive(s.start));
+      assert.equal(live.length, 1, "exactly one live child remains after cancel + /model overlap");
+      assert.equal(live[0].start, c.child.pid, "the sole live child is the tracked child");
+      const lastInit = fake.received("initialize").at(-1).params;
+      assert.equal(lastInit.provider, "next-gw");
+      assert.equal(lastInit.model, "model-2");
+      assert.equal(c.state.model, "next-gw/model-2");
+      assert.equal(c.state.sessionId, session);
+    } finally {
+      await finish(c, fake);
+    }
+  }
+
+  // 2. Typing a message while /model is resolving price waits for the switch instead of racing a second respawn.
+  {
+    const fake = makeFakeDsh({
+      onPrompt: [
+        status("running"),
+        ev({ type: "turn/start", turn: 1 }),
+        ev({ type: "assistant/message", turn: 1, step: 1, stream: [], message: textMsg("after switch") }),
+        ev({ type: "turn/end", turn: 1, reason: { kind: "completed" } }),
+        status("idle"),
+      ],
+    });
+    const c = new Controller({
+      bin: fake.bin,
+      args: ["--profile", "sdk"],
+      options: { ...OPTIONS },
+      cwd: process.cwd(),
+      env: fake.env,
+      timing: { killGraceMs: 300, shutdownGraceMs: 1500 },
+      resolveModelPrice: async () => {
+        await new Promise((r) => setTimeout(r, 150));
+        return { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
+      },
+    });
+    try {
+      await c.start();
+      const session = c.state.sessionId;
+      const firstPid = fake.starts()[0].start;
+      const switching = c.submit("/model next-gw/model-2");
+      await new Promise((r) => setTimeout(r, 40)); // mid-price lookup
+      const message = c.submit("hello after switch");
+      await Promise.all([switching, message]);
+      await until(() => fake.received("session/prompt").length === 1, "message delivered after switch");
+      assert.equal(fake.starts().length, 2, "no duplicate child spawned during overlap");
+      assert.ok(!alive(firstPid), "original child stopped");
+      assert.ok(alive(fake.starts()[1].start), "replacement child alive");
+      assert.equal(fake.received("initialize").at(-1).params.model, "model-2");
+      assert.equal(fake.received("session/prompt").at(-1).params.sessionId, session);
+    } finally {
+      await finish(c, fake);
+    }
+  }
+});
+
+test("/model enforces launcher route rules: refuses local/, removed routes, and bundle routes under --stock", async () => {
+  const { fake, c } = await boot({}, { stock: true });
+  c.validateModel = validateModelSwitch;
+  try {
+    for (const [cmd, pattern] of [
+      ["/model local/my-local", /cannot switch to or from local/],
+      ["/model antigravity/x", /removed/i],
+      ["/model claude-code/x", /--stock leaves out/],
+      ["/model openai-codex/x", /--stock leaves out/],
+      ["/model agy/x", /--stock leaves out/],
+    ]) {
+      await c.submit(cmd);
+      assert.match(c.state.blocks.at(-1).text, pattern, `${cmd} refused`);
+    }
+    assert.equal(fake.starts().length, 1, "refused routes never respawn the child");
+  } finally {
+    await finish(c, fake);
+  }
+
+  // Switching FROM local/ is also refused.
+  const localBoot = await boot({}, { provider: "local", model: "m1" });
+  localBoot.c.validateModel = validateModelSwitch;
+  try {
+    await localBoot.c.submit("/model gw/m2");
+    assert.match(localBoot.c.state.blocks.at(-1).text, /cannot switch to or from local/);
+    assert.equal(localBoot.fake.starts().length, 1);
+  } finally {
+    await finish(localBoot.c, localBoot.fake);
+  }
+});
+
+test("real dsh SDK: /model rewrites overlay, respawns, resumes same session id, and sends the next turn to the new model with history", { skip: !hasDsh }, async () => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      requests.push({ model: parsed.model, messages: parsed.messages });
+      const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+      const chunk = (delta, finish, extra = {}) => ({ id: "x", object: "chat.completion.chunk", model: parsed.model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify(chunk({ role: "assistant", content: "reply-" + parsed.model }, null))}\n\n`);
+      res.write(`data: ${JSON.stringify(chunk({}, "stop", { usage }))}\n\n`);
+      res.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const port = server.address().port;
+  const dir = mkdtempSync(join(tmpdir(), "steak-dsh-real-tui-model-"));
+  const work = join(dir, "w");
+  mkdirSync(work);
+  const { overlayFiles } = await import("../lib/overlay.js");
+  const { sdkArgs } = await import("../lib/tui/index.js");
+  const root = join(dirname(new URL(import.meta.url).pathname), "..");
+  const baseOpts = {
+    provider: "gw",
+    model: "model-one",
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    api: "openai-completions",
+    keyEnv: "FAKE_KEY",
+    compat: { supportsDeveloperRole: false },
+    contextWindow: 100000,
+    permission: "danger-full-access",
+    approvalPolicy: "never",
+    addDirs: [],
+    ownedPaths: [],
+    patches: [],
+    stock: false,
+    long: false,
+    noShell: true,
+  };
+  const overlay = overlayFiles(baseOpts, root, { sdk: true });
+  const c = new Controller({
+    bin: "dsh",
+    prepare: (opts) => sdkArgs(opts ? overlay.update(opts) : overlay.ensure()),
+    validateModel: validateModelSwitch,
+    options: baseOpts,
+    cwd: work,
+    env: { ...process.env, FAKE_KEY: "x", DSH_HOME: join(dir, "home"), DSH_TELEMETRY_MODE: "DISABLED" },
+    timing: { initTimeoutMs: 60_000, killGraceMs: 2000, shutdownGraceMs: 3000 },
+  });
+  try {
+    await c.start();
+    const session = c.state.sessionId;
+    await c.submit("remember-token-alpha");
+    await until(() => c.state.phase === "complete", "turn 1 complete", 30_000);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].model, "model-one");
+
+    await c.submit("/model gw/model-two");
+    assert.equal(c.state.sessionId, session);
+    assert.equal(c.state.model, "gw/model-two");
+
+    await c.submit("second turn");
+    await until(() => requests.length >= 2 && c.state.phase === "complete", "turn 2 complete", 30_000);
+    assert.equal(requests[1].model, "model-two", "second turn reached the newly switched model");
+    const serialized = JSON.stringify(requests[1].messages);
+    assert.match(serialized, /remember-token-alpha/, "resumed session carried turn 1 history to the new model");
+  } finally {
+    await c.quit();
+    overlay.cleanup();
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

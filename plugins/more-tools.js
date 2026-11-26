@@ -1,7 +1,7 @@
 /**
  * Adaptive tools for DeepSeek Harness: the heavier tools arrive when the work needs them.
  *
- * The bundle ships the subagent, follow-up and working-directory tools switched off, because their schemas cost
+ * The bundle ships the subagent, subagent-fork, follow-up and working-directory tools switched off, because their schemas cost
  * tokens on every request. This plugin registers one tiny tool, `more_tools`. When the model calls it, the loader
  * rows named in `rows` are switched on, and the tools they register are part of the next request.
  * Nothing is added to the conversation until then. No imports from the harness.
@@ -12,12 +12,13 @@ export const inject = ["tools", "loader"];
 export const TOOL_NAME = "more_tools";
 export const DEFAULT_ROWS = [
   "tool-subagent",
+  "tool-subagent-fork",
   "tool-subagent-control",
   "tool-working-directory",
   // Long work returns big tool results more often: keep more of them inline, as the long-work profile does.
   { id: "spill-policy", config: { maxInlineTokens: 12500 } },
 ];
-const DESCRIPTION = "Add the subagent and working-directory tools for long or delegating work. Available from your next step.";
+const DESCRIPTION = "Add the subagent, fork, follow-up and working-directory tools for long or delegating work. Available from your next step.";
 
 /** A row is an id, or { id, config }: the config is merged into the row's own config when the row is switched on. */
 const rowId = (row) => (typeof row === "string" ? row : row.id);

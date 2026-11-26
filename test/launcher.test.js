@@ -254,7 +254,7 @@ test("install forwards to dsh plugin add; doctor reports dsh, bundle and plugins
     assert.match(version.stdout, /^\d+\.\d+\.\d+/);
     const help = run(["--help"], s);
     assert.equal(help.status, 0);
-    for (const flag of ["--model", "--base-url", "--api", "--key-env", "--context-window", "--effort", "--compat", "--permission", "--add-dir", "--owned-path", "--no-shell", "--session-id", "--json", "--patch", "--stock", "--verify"]) {
+    for (const flag of ["--model", "--base-url", "--api", "--key-env", "--context-window", "--effort", "--compat", "--permission", "--add-dir", "--owned-path", "--no-shell", "--session-id", "--json", "--idle-timeout", "--patch", "--stock", "--verify"]) {
       assert.ok(help.stdout.split("\n").some((line) => line.trim().startsWith(flag)), `help lists ${flag}`);
     }
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
@@ -392,16 +392,16 @@ test("the long-work profile only switches rows the bundle ships switched the oth
   const disabledByBundle = ids(readFileSync(bundlePatch, "utf8"), "true");
   const profile = readFileSync(longPatch, "utf8");
   const enabled = [...ids(profile, "false")];
-  assert.deepEqual(enabled, ["tool-subagent", "tool-subagent-control", "tool-working-directory"]);
+  assert.deepEqual(enabled, ["tool-subagent", "tool-subagent-fork", "tool-subagent-control", "tool-working-directory"]);
   for (const id of enabled) assert.ok(disabledByBundle.has(id), `${id} is off in the bundle, so the profile has something to turn on`);
   assert.equal(ids(profile, "true").size, 0, "the profile switches nothing off");
-  for (const id of ["tool-goal", "goal-round-driver", "command-goal", "tool-workflow", "tool-subagent-fork", "session-title-llm"]) {
+  for (const id of ["tool-goal", "goal-round-driver", "command-goal", "tool-workflow", "session-title-llm"]) {
     assert.ok(disabledByBundle.has(id), `${id} stays off in the bundle`);
     assert.equal(new RegExp(`- id: ${id}\\b`).test(profile), false, `${id} is not part of the long-work profile`);
   }
   assert.match(profile, /- id: spill-policy\n\s+config:\n\s+maxInlineTokens: 12500\n/);
   assert.deepEqual([...profile.matchAll(/^- id: (\S+)/gm)].map((m) => m[1]),
-    ["tool-subagent", "tool-subagent-control", "tool-working-directory", "spill-policy"], "exactly these four rows: the finish guard is on in the bundle");
+    ["tool-subagent", "tool-subagent-fork", "tool-subagent-control", "tool-working-directory", "spill-policy"], "exactly these five rows: the finish guard is on in the bundle");
   assert.deepEqual(buildRows({ long: true, noShell: true, ownedPaths: [], patches: [] }, root),
     [{ id: "tool-bash", disabled: true }, { id: "tool-pwsh", disabled: true }, { id: "tool-jobs", disabled: true }],
     "the profile adds no generated row; --no-shell still does");

@@ -19,7 +19,7 @@ test("the TUI imports only Node built-ins or its own files: no dependencies", ()
 
 test("shipped TUI code names no model, provider, fallback chain or person", () => {
   const banned = /qwen|deepseek-v|deepseek-official|openrouter|claude|gpt-|opus|sonnet|haiku|anthropic|openai|fallback|libertydesign|berardi|mike@/i;
-  for (const file of [...files, join("lib", "tui", "..", "..", "long.patch.yml")]) {
+  for (const file of [...files, join("lib", "model-spec.js"), join("lib", "tui", "..", "..", "long.patch.yml")]) {
     const source = readFileSync(join(root, file), "utf8");
     assert.equal(banned.exec(source), null, `${file} names ${banned.exec(source)?.[0]}`);
   }

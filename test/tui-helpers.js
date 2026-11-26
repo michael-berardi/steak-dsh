@@ -92,6 +92,9 @@ async function handle(msg) {
     case "initialize": {
       if (scenario.initialize?.delayMs) await sleep(scenario.initialize.delayMs);
       if (scenario.initialize?.error) return fail(scenario.initialize.error);
+      if (scenario.initialize?.errorForProvider && msg.params?.provider === scenario.initialize.errorForProvider) {
+        return fail({ code: -32603, message: 'no adapter registered for provider "' + msg.params.provider + '"' });
+      }
       return send({ id: msg.id, result: { serverInfo: { name: "deepseek-harness-sdk-runtime", version: "0.0.1" } } });
     }
     case "session/resume":

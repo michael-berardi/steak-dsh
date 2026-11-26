@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0 - 2026-11-25
+
+- **Warm subagent fork on demand (`tool-subagent-fork`).** Included in `more_tools` (`plugins/more-tools.js` `DEFAULT_ROWS`) and `long.patch.yml`, while remaining disabled in `cordis.patch.yml` so normal one-shot runs still pay zero schema tokens for delegation tools.
+- **Idle-stream watchdog (`--idle-timeout <sec>` / `STEAK_DSH_IDLE_TIMEOUT_SEC`).** Monitors NDJSON stdout activity during `steak-dsh run --json`, automatically pausing while any `tool_call` awaits its matching `tool_result`. On idle expiry, terminates the child process group (`SIGTERM` then grace `SIGKILL` within a bounded grace period), emits final `stalled-stream` error/final NDJSON events plus stderr notice, and exits `124`.
+- **In-session live `/model <provider>/<model-id>` switching.** Available in both `steak-dsh tui` (rewrites the overlay, cleanly stops and respawns the SDK child, initializes on the new model, and calls `session/resume` on the same `sessionId` while preserving transcript and usage) and `steak-dsh chat` (rewrites the overlay for the next turn while keeping the same `--session-id`). Validates syntax and launcher route rules (`local/`, removed routes, `--stock` exclusions) with zero hardcoded models.
+- Tests: `test/idle-timeout.test.js`, plus expanded coverage in `test/more-tools.test.js`, `test/launcher.test.js`, `test/tui-session.test.js`, `test/chat.test.js`, and `test/tui-neutral.test.js`.
+
 ## 0.16.0 - 2026-11-22
 
 - **`steak-dsh doctor` shows local tuning.** A `local tuning` row says whether the optional `uio` tuner is installed (its version) and, for each

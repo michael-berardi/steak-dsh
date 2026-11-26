@@ -32,8 +32,14 @@ test("enableRows merges a row config and only touches a row that already runs wh
   assert.deepEqual(same.already, ["s"]);
 });
 
-test("the default rows are the three delegation tools plus the long-work spill setting", () => {
-  assert.deepEqual(DEFAULT_ROWS.map((row) => (typeof row === "string" ? row : row.id)), ["tool-subagent", "tool-subagent-control", "tool-working-directory", "spill-policy"]);
+test("the default rows are the four delegation tools (including subagent fork) plus the long-work spill setting", () => {
+  assert.deepEqual(DEFAULT_ROWS.map((row) => (typeof row === "string" ? row : row.id)), [
+    "tool-subagent",
+    "tool-subagent-fork",
+    "tool-subagent-control",
+    "tool-working-directory",
+    "spill-policy",
+  ]);
 });
 
 test("apply registers one small tool, and nothing when the row list is empty", () => {
@@ -111,12 +117,12 @@ test("scripted model: the default bundle offers more_tools, and calling it adds 
   assert.ok(requests.length >= 3, `expected 3 requests, got ${requests.length}`);
   const first = names(requests[0]);
   assert.ok(first.includes("more_tools"));
-  for (const heavy of ["subagent", "working_directory", "send_message", "list_agents", "interrupt_agent"]) assert.ok(!first.includes(heavy), `${heavy} is not in the first request`);
+  for (const heavy of ["subagent", "subagent_fork", "working_directory", "send_message", "list_agents", "interrupt_agent"]) assert.ok(!first.includes(heavy), `${heavy} is not in the first request`);
   const second = names(requests[1]);
-  for (const heavy of ["subagent", "working_directory", "send_message", "list_agents", "interrupt_agent"]) assert.ok(second.includes(heavy), `${heavy} is in the request after more_tools`);
+  for (const heavy of ["subagent", "subagent_fork", "working_directory", "send_message", "list_agents", "interrupt_agent"]) assert.ok(second.includes(heavy), `${heavy} is in the request after more_tools`);
   const result = requests[2].body.messages.filter((m) => m.role === "tool").map((m) => m.content).join("\n");
-  assert.match(result, /Available now: tool-subagent, tool-subagent-control, tool-working-directory/);
-  assert.ok(!names(requests[2]).includes("goal") && !names(requests[2]).includes("subagent_fork"), "goal, workflow and fork tools stay off");
+  assert.match(result, /Available now: tool-subagent, tool-subagent-fork, tool-subagent-control, tool-working-directory/);
+  assert.ok(!names(requests[2]).includes("goal") && !names(requests[2]).includes("workflow"), "goal and workflow tools stay off");
 });
 
 test("scripted model: a one-shot task never pays for the delegation tools", { skip: !hasDsh }, async () => {
@@ -128,6 +134,7 @@ test("scripted model: a one-shot task never pays for the delegation tools", { sk
 test("scripted model: the long-work profile still works, and more_tools then has nothing left to add", { skip: !hasDsh }, async () => {
   const requests = await runDsh([{ tool: "more_tools" }, { text: "ok" }], [join(root, "cordis.patch.yml"), join(root, "long.patch.yml")]);
   assert.ok(names(requests[0]).includes("subagent"), "--long still offers the delegation tools from the first request");
+  assert.ok(names(requests[0]).includes("subagent_fork"), "--long also offers subagent_fork from the first request");
   const result = requests[1].body.messages.filter((m) => m.role === "tool").map((m) => m.content).join("\n");
   assert.match(result, /Available now/);
 });

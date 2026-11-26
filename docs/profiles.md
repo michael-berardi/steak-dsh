@@ -11,7 +11,7 @@
 | Owned paths | Refuses file edits outside the paths a task owns. Symlinks are resolved first. | per run, `--owned-path` |
 | Finish guard | A turn cannot end while the todo list has open items or the reply reports unfinished work: the agent is told to keep going, at most 3 times per message, and the terminal UI shows a one-line notice each time. It reads the harness's own `todo_write` list, works the same in `run`, `chat` and `tui`, stands down for a question or an explicit hold, and leaves subagent children alone. Off with `STEAK_DSH_FINISH_GUARD=0` | on |
 | Approval-never refusal | With approval policy `never`, a call that asks for a wider sandbox is refused before it runs, and the reason names the preset that would allow it. The harness alone would answer "the user rejected" though nobody was asked. Every other call passes through. | on, acts only under `never` |
-| `more_tools` | One short tool (about 250 bytes on the first request). When the model calls it, the subagent tool, its follow-up tool and the working-directory switch are switched on and are in the next request, and the spill budget is raised so an oversized tool result stays readable by path. Goal and workflow tools stay off. | on |
+| `more_tools` | One short tool (about 250 bytes on the first request). When the model calls it, the subagent tool, subagent fork tool, follow-up tool and working-directory switch are switched on and are in the next request, and the spill budget is raised so an oversized tool result stays readable by path. Goal and workflow tools stay off. | on |
 
 Every row can be switched from your own profile patch:
 
@@ -45,6 +45,8 @@ The rows it switches on:
 
 ```yaml
 - id: tool-subagent            # delegate a bounded part to a child
+  disabled: false
+- id: tool-subagent-fork       # fork a warm subagent with conversation context
   disabled: false
 - id: tool-subagent-control    # follow up on a running child
   disabled: false
