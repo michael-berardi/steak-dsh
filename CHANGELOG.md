@@ -4,7 +4,7 @@
 
 Privacy documentation and a bounded compile cache.
 
-- README `## Privacy` is now four plain lines pointing to a new `PRIVACY.md` with full egress, telemetry, installer and local-write detail. Every local write has a documented lifetime and cleanup/retention or deletion step, including the 20-file TUI crash-log cap.
+- README `## Privacy` is now six plain lines pointing to a new `PRIVACY.md` with full egress, telemetry, installer and local-write detail. Every local write has a documented lifetime and cleanup/retention or deletion step, including the 20-file TUI crash-log cap.
 - The launcher now prunes its own Node compile cache at startup: entries older than 30 days or beyond 4096 files (oldest first) are removed, as are empty version folders; symlinks are never followed. `STEAK_DSH_COMPILE_CACHE=0` still creates nothing and a caller's `NODE_COMPILE_CACHE` is left alone.
 - There is still no update checker or update prompt; both installers continue to disable npm's update notifier. `test/privacy.test.js` covers the compile-cache bound.
 
