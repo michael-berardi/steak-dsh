@@ -13,6 +13,15 @@ import { IDLE_TIMEOUT_EXIT_CODE, runCommand } from "../lib/run.js";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const launcher = join(root, "bin", "steak-dsh");
 
+/**
+ * The idle watchdog is armed when dsh is spawned, so every idle window below also covers the fake dsh's own start-up.
+ * A bare `node` start took up to 515 ms on this Mac under 2x CPU oversubscription, so a sub-second window could expire
+ * before the fake had run a single line (seen as false stalls and "waited idle + grace" misses). Windows that must NOT
+ * expire before the fake acts are IDLE_SEC; each scenario's own delays are sized from it so what it proves is unchanged.
+ */
+const IDLE_SEC = 2;
+const IDLE_MS = IDLE_SEC * 1000;
+
 const alive = (pid) => {
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
@@ -153,8 +162,8 @@ test("idle timeout via CLI flag and env: stalls terminate child, emit valid stal
     });
 
     for (const [label, args, extraEnv] of [
-      ["CLI --idle-timeout", ["run", "--json", "--idle-timeout", "0.6", "hello"], {}],
-      ["STEAK_DSH_IDLE_TIMEOUT_SEC", ["run", "--json", "hello"], { [IDLE_TIMEOUT_ENV]: "0.6" }],
+      ["CLI --idle-timeout", ["run", "--json", "--idle-timeout", String(IDLE_SEC), "hello"], {}],
+      ["STEAK_DSH_IDLE_TIMEOUT_SEC", ["run", "--json", "hello"], { [IDLE_TIMEOUT_ENV]: String(IDLE_SEC) }],
     ]) {
       const res = runWith(args, extraEnv);
       assert.equal(res.status, IDLE_TIMEOUT_EXIT_CODE, `${label}: exit code 124 (stderr: ${res.stderr})`);
@@ -188,7 +197,7 @@ test("idle timeout: partial stdout line without trailing newline still emits cle
     process.env.FAKE_MODE = "partial-line-stall";
     try {
       const code = await runCommand(
-        { json: true, idleTimeoutSec: 0.6, permission: "danger-full-access", approvalPolicy: "never", addDirs: [], ownedPaths: [], patches: [], stock: true },
+        { json: true, idleTimeoutSec: IDLE_SEC, permission: "danger-full-access", approvalPolicy: "never", addDirs: [], ownedPaths: [], patches: [], stock: true },
         ["task"],
         { root, bin: fake, killGraceMs: 250, stdout: { write: (d) => { out += String(d); } }, stderr: { write: (d) => { err += String(d); } } },
       );
@@ -223,13 +232,13 @@ test("idle timeout: SIGTERM -> grace SIGKILL reaps stubborn child AND stubborn g
       try {
         const started = Date.now();
         const code = await runCommand(
-          { json: true, idleTimeoutSec: 0.6, permission: "danger-full-access", approvalPolicy: "never", addDirs: [], ownedPaths: [], patches: [], stock: true },
+          { json: true, idleTimeoutSec: IDLE_SEC, permission: "danger-full-access", approvalPolicy: "never", addDirs: [], ownedPaths: [], patches: [], stock: true },
           ["task"],
           { root, bin: fake, killGraceMs: 300, stdout: { write: (d) => { out += String(d); } }, stderr: { write: (d) => { err += String(d); } } },
         );
         const elapsed = Date.now() - started;
         assert.equal(code, IDLE_TIMEOUT_EXIT_CODE, `${mode}: exit 124`);
-        assert.ok(elapsed >= 800, `${mode}: waited idle timeout + grace before SIGKILL (elapsed ${elapsed}ms)`);
+        assert.ok(elapsed >= IDLE_MS + 300, `${mode}: waited idle timeout + grace before SIGKILL (elapsed ${elapsed}ms)`);
       } finally {
         if (prevMode === undefined) delete process.env.FAKE_MODE; else process.env.FAKE_MODE = prevMode;
         if (prevPid === undefined) delete process.env.FAKE_PID_FILE; else process.env.FAKE_PID_FILE = prevPid;
@@ -252,12 +261,12 @@ test("idle timeout pauses while a tool_call awaits its tool_result, and resumes 
   try {
     const fake = makeFakeDsh(dir);
 
-    // 1. Single tool call silent for 1100ms (> 600ms idle timeout) completes cleanly with exit 0.
-    const okRes = spawnSync(process.execPath, [launcher, "run", "--json", "--idle-timeout", "0.6", "run long tool"], {
+    // 1. Single tool call silent for longer than the idle timeout completes cleanly with exit 0.
+    const okRes = spawnSync(process.execPath, [launcher, "run", "--json", "--idle-timeout", String(IDLE_SEC), "run long tool"], {
       cwd: dir,
       encoding: "utf8",
       timeout: 15_000,
-      env: { ...process.env, STEAK_DSH_DSH_BIN: fake, FAKE_MODE: "tool-pause-completes", FAKE_TOOL_MS: "1100", DSH_HOME: join(dir, "home") },
+      env: { ...process.env, STEAK_DSH_DSH_BIN: fake, FAKE_MODE: "tool-pause-completes", FAKE_TOOL_MS: String(IDLE_MS + 1000), DSH_HOME: join(dir, "home") },
     });
     assert.equal(okRes.status, 0, `long tool must not trigger idle timeout (stderr: ${okRes.stderr})`);
     assert.doesNotMatch(okRes.stderr, /stalled-stream/);
@@ -266,11 +275,11 @@ test("idle timeout pauses while a tool_call awaits its tool_result, and resumes 
     assert.equal(okEvents.at(-1)?.reason?.kind, "completed");
 
     // 2. Two parallel tool calls: watchdog stays paused while c2 is still open, then triggers once c2 closes and stream stalls.
-    const parRes = spawnSync(process.execPath, [launcher, "run", "--json", "--idle-timeout", "0.6", "parallel tools"], {
+    const parRes = spawnSync(process.execPath, [launcher, "run", "--json", "--idle-timeout", String(IDLE_SEC), "parallel tools"], {
       cwd: dir,
       encoding: "utf8",
       timeout: 15_000,
-      env: { ...process.env, STEAK_DSH_DSH_BIN: fake, FAKE_MODE: "parallel-tools-then-stall", FAKE_TOOL_MS: "1000", DSH_HOME: join(dir, "home") },
+      env: { ...process.env, STEAK_DSH_DSH_BIN: fake, FAKE_MODE: "parallel-tools-then-stall", FAKE_TOOL_MS: String(IDLE_MS + 1000), DSH_HOME: join(dir, "home") },
     });
     assert.equal(parRes.status, IDLE_TIMEOUT_EXIT_CODE, `stalls after both tools close (stderr: ${parRes.stderr})`);
     const parEvents = parRes.stdout.trim().split("\n").map((line) => JSON.parse(line));
@@ -293,18 +302,18 @@ test("idle timeout: when dsh exits 0 while a descendant still holds stdout open,
       process.env.FAKE_MODE = mode;
       process.env.FAKE_PID_FILE = pidFile;
       try {
-        // killGraceMs (1000ms) exceeds idleTimeoutSec (0.9s) so a stubborn stdout holder outlives the idle window;
+        // killGraceMs exceeds idleTimeoutSec so a stubborn stdout holder outlives the idle window;
         // proving dsh's exit stops the idle watchdog instead of emitting a false stalled-stream.
         const started = Date.now();
         const code = await runCommand(
-          { json: true, idleTimeoutSec: 0.9, permission: "danger-full-access", approvalPolicy: "never", addDirs: [], ownedPaths: [], patches: [], stock: true },
+          { json: true, idleTimeoutSec: IDLE_SEC, permission: "danger-full-access", approvalPolicy: "never", addDirs: [], ownedPaths: [], patches: [], stock: true },
           ["task"],
-          { root, bin: fake, killGraceMs: 1000, stdout: { write: (d) => { out += String(d); } }, stderr: { write: (d) => { err += String(d); } } },
+          { root, bin: fake, killGraceMs: IDLE_MS + 500, stdout: { write: (d) => { out += String(d); } }, stderr: { write: (d) => { err += String(d); } } },
         );
         const elapsed = Date.now() - started;
         assert.equal(code, 0, `${mode}: preserves dsh's real exit 0 (stderr: ${err})`);
         if (mode === "exit-with-stubborn-stdout-holder") {
-          assert.ok(elapsed >= 1000, `${mode}: waited for grace period before SIGKILL (elapsed ${elapsed}ms)`);
+          assert.ok(elapsed >= IDLE_MS + 500, `${mode}: waited for grace period before SIGKILL (elapsed ${elapsed}ms)`);
         }
       } finally {
         if (prevMode === undefined) delete process.env.FAKE_MODE; else process.env.FAKE_MODE = prevMode;
@@ -316,7 +325,7 @@ test("idle timeout: when dsh exits 0 while a descendant still holds stdout open,
       assert.equal(finals.length, 1, `${mode}: exactly one real final event`);
       assert.equal(finals[0].reason.kind, "completed");
       const pids = JSON.parse(readFileSync(pidFile, "utf8"));
-      const waitDeadline = Date.now() + 1000;
+      const waitDeadline = Date.now() + 2000;
       while (alive(pids.holder) && Date.now() < waitDeadline) await new Promise((r) => setTimeout(r, 20));
       assert.equal(alive(pids.holder), false, `${mode}: stdout-holding descendant ${pids.holder} was cleaned up`);
     }
@@ -331,13 +340,18 @@ test("idle timeout: a slow-reading stdout consumer pauses the idle timer and rec
     const fake = makeFakeDsh(dir);
     let captured = "";
     let backpressured = false;
+    let writes = 0;
+    let longestWriteMs = 0;
     const slowStdout = new Writable({
       highWaterMark: 16,
       write(chunk, _enc, cb) {
         captured += chunk.toString("utf8");
         backpressured = true;
-        // Each write takes 220ms; 8+ chunks take >1.8s total, well past idleTimeoutSec (0.8s) if backpressure didn't pause timers.
-        setTimeout(cb, 220);
+        // The first write alone blocks longer than the idle timeout (however the pipe coalesces chunks), so a watchdog
+        // that kept running under backpressure would fire; later writes stay slow enough to keep the stream paused.
+        const delay = writes++ === 0 ? IDLE_MS + 400 : 100;
+        const started = Date.now();
+        setTimeout(() => { longestWriteMs = Math.max(longestWriteMs, Date.now() - started); cb(); }, delay);
       },
     });
     let err = "";
@@ -345,7 +359,7 @@ test("idle timeout: a slow-reading stdout consumer pauses the idle timer and rec
     process.env.FAKE_MODE = "slow-consumer-burst";
     try {
       const code = await runCommand(
-        { json: true, idleTimeoutSec: 0.8, permission: "danger-full-access", approvalPolicy: "never", addDirs: [], ownedPaths: [], patches: [], stock: true },
+        { json: true, idleTimeoutSec: IDLE_SEC, permission: "danger-full-access", approvalPolicy: "never", addDirs: [], ownedPaths: [], patches: [], stock: true },
         ["task"],
         { root, bin: fake, killGraceMs: 250, stdout: slowStdout, stderr: { write: (d) => { err += String(d); } } },
       );
@@ -354,6 +368,7 @@ test("idle timeout: a slow-reading stdout consumer pauses the idle timer and rec
       if (prevMode === undefined) delete process.env.FAKE_MODE; else process.env.FAKE_MODE = prevMode;
     }
     assert.equal(backpressured, true, "slow stdout actually exercised backpressure");
+    assert.ok(longestWriteMs > IDLE_MS, `one consumer write blocked longer than the idle timeout (${longestWriteMs} ms)`);
     assert.doesNotMatch(err, /stalled-stream/, "backpressure must not trigger a false stalled-stream");
     const events = captured.trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(events.filter((e) => e.type === "text").length, 8, "all 8 text chunks arrived without truncation");

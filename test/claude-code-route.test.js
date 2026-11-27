@@ -291,13 +291,16 @@ test("G4: an aborted request stops the whole process tree, including a grandchil
 
 test("G4: every wait has a bound and a named error, and nothing is left running", async () => {
   const d = dir();
-  const { adapter, log } = makeAdapter(d, { FAKE_CLAUDE_MODE: "hang" }, { timeoutMs: 700 });
+  // The first-byte limit is 30% of timeoutMs and also covers the fake CLI's start-up (up to 515 ms here under 2x CPU
+  // oversubscription); at 700 ms the wait limit could fire before the fake reached the query and logged its grandchild.
+  const { adapter, log } = makeAdapter(d, { FAKE_CLAUDE_MODE: "hang" }, { timeoutMs: 3000 });
   const started = Date.now();
   const error = await failure(adapter, request([user("hi")]));
   assert.equal(error.code, "CLAUDE_CODE_WAIT_LIMIT");
   assert.match(error.message, /wait limit|idle limit/);
-  assert.ok(Date.now() - started < 8000, "bounded");
+  assert.ok(Date.now() - started < 20_000, "bounded");
   const grandchild = readLog(log).find((e) => e.event === "grandchild");
+  assert.ok(grandchild, "the fake reached the request and started its grandchild before the limit fired");
   assert.equal(await waitFor(() => !alive(grandchild.pid) && !alive(grandchild.child)), true);
   assert.equal(liveClaudeWorkerCount(), 0);
 });
