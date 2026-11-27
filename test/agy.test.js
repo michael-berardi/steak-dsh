@@ -254,7 +254,9 @@ test("status CANCELED, INTERRUPTED and INVALID are named, and exit-without-resul
 });
 
 test("a run that exceeds the time limit is stopped and named", async (t) => {
-  const { adapter, log } = setup(t, "hang", {}, { timeoutMs: 400 });
+  // The limit also covers the fake agy's own start-up (a bare node start took up to 515 ms here under 2x CPU
+  // oversubscription); a sub-second limit could stop it before it logged its launch, leaving nothing to check.
+  const { adapter, log } = setup(t, "hang", {}, { timeoutMs: 2500 });
   const error = await failure(adapter, {});
   assert.equal(error.code, "AGY_TIMEOUT");
   const [launch] = readLog(log);
